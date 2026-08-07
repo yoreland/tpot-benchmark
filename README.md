@@ -648,11 +648,16 @@ while true; do check_spot_interruption; sleep 30; done &
 
 #### Spot 成本估算
 
-| 实例类型 | On-Demand ($/hr) | 预估 Spot ($/hr) | 节省比例 | 备注 |
+| 实例类型 | On-Demand ($/hr) | Spot 实价 ($/hr) | 节省比例 | 最优 Region/AZ |
 |---|---|---|---|---|
-| p6-b300.48xlarge | $142.42 | ~$60-85 (预估) | 40-60% | Region 少，Spot 容量有限 |
-| p6-b200.48xlarge | $113.93 | ~$45-70 (预估) | 40-60% | 6 Region 可用，容量更好 |
-| p5en.48xlarge | ~$85-98 | ~$35-50 (预估) | 45-60% | 多 Region，Spot 最容易拿到 |
+| p6-b300.48xlarge | $142.42 | $44.59 – $51.55 | **64–69%** | us-east-1a ($44.59) |
+| p6-b200.48xlarge | $113.93 | $40.94 – $42.47 | **63–64%** | us-west-2d ($40.94) |
+| p5en.48xlarge | ~$85–98 | $26.69 – $27.24 | **69–72%** | us-east-2a ($26.69) |
 
-> ⚠️ Spot 价格实时变动，以上为估算。建议设置 MaxPrice 为 On-Demand 的 55-60%，在拿到实例和节省成本之间取平衡。
+> 以上 Spot 实价数据查询于 2026-08-07。Spot 价格实时变动，建议设置 MaxPrice 为 On-Demand 的 55-60%，在拿到实例和节省成本之间取平衡。
+>
+> **详细 Spot 价格分布：**
+> - p6-b300.48xlarge: us-west-2a $51.55, us-west-2b $49.38, us-east-1a $44.59
+> - p6-b200.48xlarge: us-west-2a $42.47, us-west-2b $41.73, us-west-2d $40.94, us-east-2a $42.30, us-east-1a $42.23
+> - p5en.48xlarge: us-west-2a $27.23, us-west-2d $27.18, us-west-2c $27.24, us-east-2a $26.69, us-east-1a $26.95
 
