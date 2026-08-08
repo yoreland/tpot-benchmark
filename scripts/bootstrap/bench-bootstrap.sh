@@ -565,7 +565,7 @@ setup_storage() {
             else
                 if run_destructive mkfs.ext4 -F "$NVME_TARGET" 2>/dev/null; then break; fi
             fi
-            ((attempts++))
+            attempts=$((attempts + 1))
             log "mkfs 重试 $attempts/15（等待设备释放）"
             sleep 1
         done
