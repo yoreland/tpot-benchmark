@@ -487,6 +487,23 @@ setup_storage() {
 
     mkdir -p "$NVME_MOUNT"
     if [[ -n "$NVME_TARGET" ]]; then
+        # Deep Learning AMI 可能已自动挂载 instance store；必须先卸载才能格式化
+        local existing_mount
+        existing_mount="$(findmnt -n -o TARGET "$NVME_TARGET" 2>/dev/null || true)"
+        if [[ -n "$existing_mount" ]]; then
+            log "检测到 $NVME_TARGET 已挂载于 $existing_mount，先 umount"
+            run_destructive umount "$NVME_TARGET" || run_destructive umount -l "$NVME_TARGET"
+        fi
+        # RAID 成员也可能被 auto-mount（多盘场景）
+        for dev in "${NVME_DEVICES[@]}"; do
+            local m
+            m="$(findmnt -n -o TARGET "$dev" 2>/dev/null || true)"
+            if [[ -n "$m" && "$m" != "$NVME_MOUNT" ]]; then
+                log "检测到成员盘 $dev 已挂载于 $m，先 umount"
+                run_destructive umount "$dev" || run_destructive umount -l "$dev"
+            fi
+        done
+
         if command -v mkfs.xfs >/dev/null 2>&1; then
             run_destructive mkfs.xfs -f "$NVME_TARGET"
         else
