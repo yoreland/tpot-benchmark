@@ -531,20 +531,53 @@ setup_storage() {
         # 等 udev 事件队列清空
         udevadm settle --timeout=5 2>/dev/null || true
 
-        # 如果 mdadm 曾经 assemble 了 RAID，先 stop（仅多盘场景或检测到 superblock）
-        if command -v mdadm >/dev/null 2>&1 && [[ "${#NVME_DEVICES[@]}" -gt 1 ]]; then
-            mdadm --stop "$NVME_TARGET" 2>/dev/null || true
-            for dev in "${NVME_DEVICES[@]}"; do
-                mdadm --stop "$dev" 2>/dev/null || true
-                mdadm --zero-superblock "$dev" 2>/dev/null || true
-            done
+        # systemd 可能通过 .mount unit 持有该设备。找到并 stop 它
+        if command -v systemctl >/dev/null 2>&1; then
+            local unit
+            unit="$(systemctl list-units --type=mount --no-legend 2>/dev/null \
+                   | awk -v dev="$NVME_TARGET" '$0 ~ dev {print $1}' | head -1)"
+            if [[ -z "$unit" ]]; then
+                # 按 mount point 搜索：DLAMI 通常挂到 /mnt 或 /opt/dlami/nvme
+                for mp in /mnt /opt/dlami/nvme; do
+                    unit="$(systemctl list-units --type=mount --no-legend 2>/dev/null \
+                           | awk -v mp="$mp" '$0 ~ mp {print $1}' | head -1)"
+                    [[ -n "$unit" ]] && break
+                done
+            fi
+            if [[ -n "$unit" ]]; then
+                log "发现 systemd mount unit: $unit，stop 它"
+                systemctl stop "$unit" 2>/dev/null || true
+                sleep 1
+            fi
         fi
 
-        if command -v mkfs.xfs >/dev/null 2>&1; then
-            run_destructive mkfs.xfs -f "$NVME_TARGET"
-        else
-            warn "未找到 mkfs.xfs，回退到 mkfs.ext4"
-            run_destructive mkfs.ext4 -F "$NVME_TARGET"
+        # 再次尝试 umount（systemctl stop 后可能需要显式 umount）
+        umount "$NVME_TARGET" 2>/dev/null || umount -l "$NVME_TARGET" 2>/dev/null || true
+        for dev in "${NVME_DEVICES[@]}"; do
+            umount "$dev" 2>/dev/null || umount -l "$dev" 2>/dev/null || true
+        done
+
+        # 最终重试循环：等待内核释放设备（最多 15s）
+        local attempts=0
+        while [[ $attempts -lt 15 ]]; do
+            if command -v mkfs.xfs >/dev/null 2>&1; then
+                if run_destructive mkfs.xfs -f "$NVME_TARGET" 2>/dev/null; then break; fi
+            else
+                if run_destructive mkfs.ext4 -F "$NVME_TARGET" 2>/dev/null; then break; fi
+            fi
+            ((attempts++))
+            log "mkfs 重试 $attempts/15（等待设备释放）"
+            sleep 1
+        done
+        if [[ $attempts -ge 15 ]]; then
+            log "[错误] 尝试 15 次后仍无法格式化 $NVME_TARGET"
+            log "lsblk 输出:"
+            lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL 2>&1 | tee -a "$LOG_FILE" || true
+            log "fuser 输出:"
+            fuser -v "$NVME_TARGET" 2>&1 | tee -a "$LOG_FILE" || true
+            log "mount 输出:"
+            mount | grep nvme 2>&1 | tee -a "$LOG_FILE" || true
+            return 1
         fi
         run_destructive mount "$NVME_TARGET" "$NVME_MOUNT"
         log "已挂载 $NVME_TARGET -> $NVME_MOUNT"
