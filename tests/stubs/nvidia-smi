@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# 假 nvidia-smi：按 STUB_GPU_COUNT 输出 csv,noheader,nounits 格式的采样行。
+set -uo pipefail
+printf 'nvidia-smi %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+
+count="${STUB_GPU_COUNT:-8}"
+i=0
+while [[ "$i" -lt "$count" ]]; do
+    echo "$i, 87, 62, 138000, 144384, 61"
+    i=$((i + 1))
+done

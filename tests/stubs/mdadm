@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# 假 mdadm：只记录调用。DRY_RUN=1 时脚本本身不会真的调它（改为记录命令行），
+# 但 command -v mdadm 必须能找到它，且非 DRY_RUN 路径也需要它存在。
+set -uo pipefail
+printf 'mdadm %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+exit 0

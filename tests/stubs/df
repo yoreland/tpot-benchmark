@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# 假 df：STUB_DF_AVAIL_KB 控制可用空间（KiB），用来驱动容量护栏的两条分支。
+set -uo pipefail
+printf 'df %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+
+case "$*" in
+    *--output=avail*)
+        echo "     Avail"
+        echo "${STUB_DF_AVAIL_KB:-30000000000}"
+        ;;
+    *--output=source*)
+        echo "Filesystem"
+        echo "${STUB_ROOT_SOURCE:-/dev/nvme0n1p1}"
+        ;;
+    *)
+        echo "Filesystem     1K-blocks      Used Available Use% Mounted on"
+        echo "/dev/nvme0n1p1 206291404  12345678 193945726   6% /"
+        ;;
+esac

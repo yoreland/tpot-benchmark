@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 假 mkfs.xfs：只记录调用。存在与否决定脚本走 xfs 还是回退 ext4 分支。
+set -uo pipefail
+printf 'mkfs.xfs %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+exit 0

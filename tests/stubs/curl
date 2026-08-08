@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# 假 curl：模拟 IMDSv2（PUT 取 token，再带 token 取元数据）、SGLang /health、
+# 以及 checkip.amazonaws.com。STUB_SPOT_ACTION 非空即代表收到 Spot 中断通知。
+set -uo pipefail
+printf 'curl %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+
+ARGS="$*"
+
+case "$ARGS" in
+    *"latest/api/token"*)
+        printf '%s' "${STUB_IMDS_TOKEN:-stub-imds-token}"
+        exit 0
+        ;;
+    *"meta-data/spot/instance-action"*)
+        if [[ -n "${STUB_SPOT_ACTION:-}" ]]; then
+            printf '%s' "$STUB_SPOT_ACTION"
+            exit 0
+        fi
+        # 没有中断通知时 IMDS 返回 404，curl -f 以非零退出
+        exit 22
+        ;;
+    *"meta-data/instance-id"*)
+        printf '%s' "${STUB_INSTANCE_ID:-i-0stub00000000000}"
+        exit 0
+        ;;
+    *"meta-data/instance-type"*)
+        printf '%s' "${STUB_INSTANCE_TYPE:-p5en.48xlarge}"
+        exit 0
+        ;;
+    *localhost*health*)
+        if [[ "${STUB_HEALTH_OK:-1}" == "1" ]]; then
+            printf '%s' '{"status":"ok"}'
+            exit 0
+        fi
+        exit 22
+        ;;
+    *checkip.amazonaws.com*)
+        echo "${STUB_EGRESS_IP:-203.0.113.7}"
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
