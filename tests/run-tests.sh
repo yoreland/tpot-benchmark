@@ -693,6 +693,338 @@ assert_contains_token "$LEDGER_REPORT" "OK" "台账为三级 stage 各记了一�
 end_case
 
 # =============================================================================
+# FEAT-004 的公共夹具：总结闸门相关用例都用这几个 helper
+# =============================================================================
+STAGED="$REPO_ROOT/scripts/run-staged.sh"
+SUMMARIZER="$REPO_ROOT/scripts/summarize-run.sh"
+FIXTURE_RUN_ID="20260807-150955-a1b2"
+LOWACCEPT_RUN_ID="20260807-171500-l0wa"
+
+# 造一份阶段台账。第二个参数决定那条 h200 成功记录有没有写过总结；
+# 第三个参数给 pending 时再塞两条「跑完了但 phase 还没回填」的记录
+# （一条 full、一条 plumbing），用来验证回填只认 GPU stage。
+seed_ledger() {
+    local path="$1" summary_done="$2" pending="${3:-no}"
+    SEED_PATH="$path" SEED_DONE="$summary_done" SEED_PENDING="$pending" \
+    SEED_RUN_ID="$FIXTURE_RUN_ID" python3 - <<'PYEOF'
+import json
+import os
+
+entries = [{
+    "stage": "full",
+    "run_id": os.environ["SEED_RUN_ID"],
+    "instance_type": "p5en.48xlarge",
+    "instance_id": "i-0000000000fixture",
+    "started_at": "2026-08-07T15:09:55Z",
+    "ended_at": "2026-08-07T16:30:15Z",
+    "exit_status": 0,
+    "s3_prefix": "s3://tpot-bench-results-077090643075-us-east-2/runs/%s/"
+                 % os.environ["SEED_RUN_ID"],
+    "recipe": "scripts/recipes/h200-tp4-fp4-eagle.env",
+    "mode": "real",
+    "note": "测试用种子记录（没有启动过任何实例）",
+    "gpu_family": "h200",
+    "gpu_success": True,
+    "final_phase": "completed",
+    "spot_price_usd_per_hour": 26.6617,
+    "summary_required": True,
+    "summary_done": os.environ["SEED_DONE"] == "true",
+    "summary_path": None,
+    "summary_ack": False,
+}]
+if os.environ["SEED_PENDING"] == "yes":
+    # 这两条刻意不带 final_phase / gpu_success：模拟「不带 --wait 启动，
+    # 退出那一刻 status.json 还没上传」的情形，闸门应当只回填 GPU stage 那条。
+    entries = [{
+        "stage": "plumbing", "run_id": "20260808-010101-plmb",
+        "instance_type": "c5d.large", "instance_id": "i-0stub00000000000",
+        "started_at": "2026-08-08T01:01:01Z", "ended_at": "2026-08-08T01:21:01Z",
+        "exit_status": 0, "s3_prefix": "s3://bkt/runs/20260808-010101-plmb/",
+        "recipe": "", "mode": "real", "note": "c5d.large 管路验证成功（无 GPU）",
+    }, {
+        "stage": "full", "run_id": "20260808-020202-h200",
+        "instance_type": "p5en.48xlarge", "instance_id": "i-0stub00000000000",
+        "started_at": "2026-08-08T02:02:02Z", "ended_at": "2026-08-08T02:05:02Z",
+        "exit_status": 0, "s3_prefix": "s3://bkt/runs/20260808-020202-h200/",
+        "recipe": "scripts/recipes/h200-tp4-fp4-eagle.env", "mode": "real",
+        "note": "不带 --wait 启动，退出时 phase 未知",
+    }]
+with open(os.environ["SEED_PATH"], "w", encoding="utf-8") as fh:
+    json.dump({"schema": "tpot-bench-stage-ledger/2", "entries": entries},
+              fh, indent=2, ensure_ascii=False)
+    fh.write("\n")
+PYEOF
+}
+
+# 跑一次 run-staged.sh：stub 永远在 PATH 最前，台账写在用例目录里。
+# 第 4 个参数控制要不要给 CONFIRM_SPEND=yes —— 验收标准明确要求证明
+# 「补上 CONFIRM_SPEND 也绕不过总结闸门」，所以这里必须真的传一次。
+# 传的时候 aws 一律是 tests/stubs/aws，绝不会碰到真实 AWS。
+run_staged_gate() {
+    local bin="$1" ledger="$2" out="$3" confirm="$4"; shift 4
+    if [[ "$confirm" == "yes" ]]; then
+        timeout "$CASE_TIMEOUT" env \
+            PATH="$bin:$PATH" STUB_LOG="$STUB_LOG" CONFIRM_SPEND=yes \
+            LEDGER="$ledger" LEDGER_REFRESH="${GATE_REFRESH:-false}" \
+            STUB_SPOT_PRICE=26.661700 \
+            bash "$STAGED" "$@" >"$out" 2>&1
+    else
+        timeout "$CASE_TIMEOUT" env -u CONFIRM_SPEND \
+            PATH="$bin:$PATH" STUB_LOG="$STUB_LOG" \
+            LEDGER="$ledger" LEDGER_REFRESH="${GATE_REFRESH:-false}" \
+            STUB_SPOT_PRICE=26.661700 \
+            bash "$STAGED" "$@" >"$out" 2>&1
+    fi
+    LAST_EXIT=$?
+}
+
+ledger_field() {
+    # ledger_field <台账> <run_id> <字段>
+    LF_PATH="$1" LF_RUN="$2" LF_KEY="$3" python3 - <<'PYEOF'
+import json
+import os
+
+try:
+    with open(os.environ["LF_PATH"], encoding="utf-8") as fh:
+        entries = json.load(fh).get("entries") or []
+except (json.JSONDecodeError, OSError):
+    entries = []
+value = "<无记录>"
+for entry in entries:
+    if entry.get("run_id") == os.environ["LF_RUN"]:
+        value = entry.get(os.environ["LF_KEY"], "<无此字段>")
+print(json.dumps(value, ensure_ascii=False))
+PYEOF
+}
+
+# =============================================================================
+# 用例 16) 总结闸门：有一次 GPU 成功但没写总结时，付费 GPU stage 必须被拦住，
+# 而且**补上 CONFIRM_SPEND=yes 也一样被拦**。后半句才是关键：如果这个闸门排在
+# 花费闸门后面，无人值守的会话只要照常带着 CONFIRM_SPEND=yes 就能继续烧钱。
+# =============================================================================
+begin_case 16 "跑成功未总结时 gpu-smoke/full 以 3 退出，CONFIRM_SPEND 也绕不过"
+BIN="$(make_case_bin)"
+GATE_LEDGER="$CASE_DIR/stage-ledger.json"
+seed_ledger "$GATE_LEDGER" false
+run_staged_gate "$BIN" "$GATE_LEDGER" "$CASE_DIR/gate-full.log" no --stage full
+assert_exit 3 "$LAST_EXIT" "无 CONFIRM_SPEND + 有未总结的成功运行 -> 退出码 3（不是 2）"
+assert_file_contains "$CASE_DIR/gate-full.log" "$FIXTURE_RUN_ID" \
+    "拒绝信息里点名了等待总结的 RUN_ID"
+assert_file_contains "$CASE_DIR/gate-full.log" "scripts/summarize-run.sh" \
+    "拒绝信息里给出了清闸门的命令"
+assert_file_contains "$CASE_DIR/gate-full.log" "--ack-summary" "说明了怎么显式跳过"
+assert_file_not_contains "$CASE_DIR/gate-full.log" "渲染 user-data" \
+    "闸门在 run-staged 自己这里就拦住了，没有把 launcher 叫起来"
+run_staged_gate "$BIN" "$GATE_LEDGER" "$CASE_DIR/gate-full-confirm.log" yes --stage full
+assert_exit 3 "$LAST_EXIT" "带 CONFIRM_SPEND=yes 仍然是 3（总结闸门排在花费闸门之前）"
+assert_file_not_contains "$CASE_DIR/gate-full-confirm.log" "渲染 user-data" \
+    "带 CONFIRM_SPEND=yes 也没有把 launcher 叫起来"
+run_staged_gate "$BIN" "$GATE_LEDGER" "$CASE_DIR/gate-smoke.log" no --stage gpu-smoke
+assert_exit 3 "$LAST_EXIT" "gpu-smoke 同样被总结闸门拦住"
+assert_file_not_contains "$STUB_LOG" "run-instances" "三次尝试都没有发起任何 run-instances"
+assert_file_not_contains "$STUB_LOG" "terminate-instances" "更没有动过任何实例"
+end_case
+
+# =============================================================================
+# 用例 17) --ack-summary：能跳过，但跳过之后紧接着还得过花费闸门（退出码 2），
+# 而且台账里必须留下「用过 override」的痕迹 —— 可跳过但绝不静默。
+# =============================================================================
+begin_case 17 "--ack-summary 放行总结闸门后仍被花费闸门拦住，且台账留痕"
+BIN="$(make_case_bin)"
+ACK_LEDGER="$CASE_DIR/stage-ledger.json"
+seed_ledger "$ACK_LEDGER" false
+run_staged_gate "$BIN" "$ACK_LEDGER" "$CASE_DIR/ack.log" no --stage full --ack-summary
+assert_exit 2 "$LAST_EXIT" "总结闸门被放行，改由花费闸门以 2 拒绝（两个闸门相互独立）"
+assert_file_contains "$CASE_DIR/ack.log" "已用 --ack-summary 跳过总结闸门" "override 在输出里大声留痕"
+assert_file_contains "$CASE_DIR/ack.log" "p5en.48xlarge" "继续走到了花费画像"
+assert_file_contains "$CASE_DIR/ack.log" "106.65" "打印了最坏花费"
+assert_contains_token "$(ledger_field "$ACK_LEDGER" "-" summary_ack)" "true" \
+    "台账里那条拒绝记录标了 summary_ack=true"
+assert_file_not_contains "$STUB_LOG" "run-instances" "override 也没有真的启动实例"
+end_case
+
+# =============================================================================
+# 用例 18) 总结写完（summary_done=true）之后闸门必须放行，
+# 否则总结就变成了一道永久的墙。
+# =============================================================================
+begin_case 18 "summary_done=true 时闸门放行，退回普通的花费拒绝"
+BIN="$(make_case_bin)"
+DONE_LEDGER="$CASE_DIR/stage-ledger.json"
+seed_ledger "$DONE_LEDGER" true
+run_staged_gate "$BIN" "$DONE_LEDGER" "$CASE_DIR/done.log" no --stage full
+assert_exit 2 "$LAST_EXIT" "已有总结时不再触发 3，退回花费闸门的 2"
+assert_file_contains "$CASE_DIR/done.log" "台账里没有「已成功但未总结」的运行" "明确说明闸门放行"
+assert_file_not_contains "$CASE_DIR/done.log" "已经有一次 GPU 运行成功了" "不再打印停顿拒绝信息"
+end_case
+
+# =============================================================================
+# 用例 19) phase 回填只认 GPU stage：c5d.large 的管路成功永远不算 GPU 成功，
+# 所以它不可能触发总结闸门。同时验证「不带 --wait 启动」的自愈路径：
+# 下一次执行时闸门会用只读方式把 full 那条的 phase 补成真值并拦住。
+# =============================================================================
+begin_case 19 "c5d.large 管路成功不算 GPU 成功；full 的 phase 会被只读回填"
+BIN="$(make_case_bin)"
+# 让这个用例的 aws 在 s3 cp status.json 时返回 phase=completed，
+# 其余子命令仍交给公共 stub（照样只写调用日志，不碰真实 AWS）。
+# 注意必须先 rm 掉那个符号链接：直接 `cat >` 会顺着链接把 tests/stubs/aws
+# 本身覆盖掉（第一版就踩了这个坑，后面所有用例一起挂）。
+rm -f "$BIN/aws"
+cat >"$BIN/aws" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+printf 'aws %s\n' "\$*" >>"\${STUB_LOG:-/dev/null}"
+if [[ "\$*" == *"s3 cp"*"status.json"* ]]; then
+    # 形状照抄 bench-bootstrap.sh 真正写出的 status.json
+    echo '{"run_id": "20260808-020202-h200", "stage": "full", "phase": "completed", "exit_code": 0}'
+    exit 0
+fi
+exec "$STUB_DIR/aws" "\$@"
+EOF
+chmod +x "$BIN/aws"
+REFILL_LEDGER="$CASE_DIR/stage-ledger.json"
+seed_ledger "$REFILL_LEDGER" false yes
+GATE_REFRESH=true run_staged_gate "$BIN" "$REFILL_LEDGER" "$CASE_DIR/refill.log" no --stage full
+assert_exit 3 "$LAST_EXIT" "回填后发现 full 那次其实成功了，于是被总结闸门拦住"
+assert_file_contains "$CASE_DIR/refill.log" "回补台账: RUN_ID 20260808-020202-h200" \
+    "只读回填了 full 那条记录的 phase"
+assert_file_not_contains "$CASE_DIR/refill.log" "回补台账: RUN_ID 20260808-010101-plmb" \
+    "plumbing 那条根本不参与回填（它没有 GPU）"
+assert_contains_token "$(ledger_field "$REFILL_LEDGER" 20260808-020202-h200 gpu_success)" \
+    "true" "full 那条被标成 gpu_success=true"
+assert_contains_token "$(ledger_field "$REFILL_LEDGER" 20260808-010101-plmb gpu_success)" \
+    "<无此字段>" "plumbing 那条始终没有 gpu_success 字段（c5d.large 无 GPU）"
+assert_file_contains "$CASE_DIR/refill.log" "20260808-020202-h200" "拒绝信息点名的是 H200 那次运行"
+# 顺带确认 plumbing 自己写台账时也不会给自己发 GPU 身份
+PLUMB_LEDGER="$CASE_DIR/plumbing-ledger.json"
+timeout "$CASE_TIMEOUT" env -u CONFIRM_SPEND PATH="$BIN:$PATH" STUB_LOG="$STUB_LOG" \
+    LEDGER="$PLUMB_LEDGER" LEDGER_REFRESH=false STUB_SPOT_PRICE=0.029500 \
+    bash "$STAGED" --stage plumbing >"$CASE_DIR/plumbing.log" 2>&1
+LAST_EXIT=$?
+assert_exit 2 "$LAST_EXIT" "plumbing 仍然被花费闸门拦住"
+assert_file_contains "$PLUMB_LEDGER" '"gpu_family": "none"' "c5d.large 的台账记录 gpu_family=none"
+assert_file_contains "$PLUMB_LEDGER" '"summary_required": false' "因此永远不会要求写总结"
+assert_file_not_contains "$STUB_LOG" "run-instances" "整个用例没有发起任何 run-instances"
+end_case
+
+# =============================================================================
+# 用例 20) summarize-run.sh --fixture：总结里必须有真数字、有基线对比、有 A1-A9
+# 判定表，并且把台账翻成 summary_done=true（这才是闸门的放行条件）。
+# =============================================================================
+begin_case 20 "summarize-run 夹具产出完整总结并放行闸门"
+SUM_LEDGER="$CASE_DIR/stage-ledger.json"
+SUM_OUT="$CASE_DIR/summaries"
+seed_ledger "$SUM_LEDGER" false
+timeout "$CASE_TIMEOUT" bash "$SUMMARIZER" --fixture "$REPO_ROOT/tests/fixtures" \
+    --out "$SUM_OUT" --ledger "$SUM_LEDGER" >"$CASE_DIR/stdout.log" 2>&1
+LAST_EXIT=$?
+assert_exit 0 "$LAST_EXIT" "夹具总结生成成功（不碰 AWS，零花费）"
+SUM_MD="$SUM_OUT/$FIXTURE_RUN_ID-summary.md"
+assert_file_exists "$SUM_MD" "总结文件名是 <RUN_ID>-summary.md"
+assert_file_contains "$SUM_MD" "4.21 ms" "总结里有 TPOT P50 实测值"
+assert_file_contains "$SUM_MD" "4.88 ms" "总结里有 TPOT P95 实测值"
+assert_file_contains "$SUM_MD" "1.512 s" "总结里有 TTFT P50 实测值"
+assert_file_contains "$SUM_MD" "1.603 s" "总结里有 TTFT P95 实测值"
+assert_file_contains "$SUM_MD" "6.428 s" "总结里有 E2E P50 实测值"
+assert_file_contains "$SUM_MD" "3.76" "与 README 12.2 的 ~3.76 ms 基线做了对比"
+assert_file_contains "$SUM_MD" "266" "并且对比了 ~266 tok/s 的 decode 吞吐"
+assert_file_contains "$SUM_MD" "accept length" "有 accept length 这一项"
+assert_file_contains "$SUM_MD" "2.71" "写出了实测 accept_length"
+assert_file_contains "$SUM_MD" "≥ 2" "accept_length 对的是 A7 的 2.0 门槛"
+for cid in A1 A2 A3 A4 A5 A6 A7 A8 A9; do
+    assert_file_contains "$SUM_MD" "**$cid**" "判定表里有 README 12.9 的 $cid"
+done
+assert_file_contains "$SUM_MD" "未评估" "拿不到判据的条目标成未评估而不是 PASS"
+assert_file_contains "$SUM_MD" "118770 MiB" "GPU 显存峰值来自 gpu.csv"
+assert_file_contains "$SUM_MD" "91% / 94.5% / 98%" "每张卡的利用率 min/mean/max 都在"
+assert_file_contains "$SUM_MD" "4820 s / 3600" "花费按 status.json/元数据的耗时算出来"
+assert_file_contains "$SUM_MD" "12.12.1" "给出了 README 12.12.1 该填哪一行"
+assert_file_contains "$SUM_MD" "合成夹具" "夹具产出的总结显著标注了不是真实测量"
+# A6/A8/A9 必须是未评估而不是 PASS：这三条产物里确实没有判据
+for spec in "A6" "A8" "A9"; do
+    A_LINE="$(grep -F "**$spec**" "$SUM_MD" | head -n1)"
+    assert_contains_token "$A_LINE" "未评估" "$spec 标成未评估（并写了原因）"
+    assert_not_contains_token "$A_LINE" "PASS" "$spec 没有被悄悄算成 PASS"
+done
+assert_contains_token "$(ledger_field "$SUM_LEDGER" "$FIXTURE_RUN_ID" summary_done)" \
+    "true" "台账里那条记录被翻成 summary_done=true"
+assert_contains_token "$(ledger_field "$SUM_LEDGER" "$FIXTURE_RUN_ID" summary_path)" \
+    "$FIXTURE_RUN_ID-summary.md" "台账里记下了总结路径"
+# 幂等：再跑一次不该把台账写坏、也不该追加记录
+timeout "$CASE_TIMEOUT" bash "$SUMMARIZER" --fixture "$REPO_ROOT/tests/fixtures" \
+    --out "$SUM_OUT" --ledger "$SUM_LEDGER" >"$CASE_DIR/stdout2.log" 2>&1
+LAST_EXIT=$?
+assert_exit 0 "$LAST_EXIT" "重复生成同一份总结仍以 0 退出（幂等）"
+IDEMPOTENT="$(python3 - "$SUM_LEDGER" <<'PYEOF'
+import json
+import sys
+
+ledger = json.load(open(sys.argv[1], encoding="utf-8"))
+print("%s %d" % (ledger.get("schema"), len(ledger.get("entries") or [])))
+PYEOF
+)"
+assert_contains_token "$IDEMPOTENT" "tpot-bench-stage-ledger/2 1" \
+    "台账仍是合法 JSON、schema 为 /2、条数没有被追加"
+# 闸门此刻必须放行
+BIN="$(make_case_bin)"
+run_staged_gate "$BIN" "$SUM_LEDGER" "$CASE_DIR/after.log" no --stage full
+assert_exit 2 "$LAST_EXIT" "总结落地后闸门放行，退回花费闸门的 2"
+end_case
+
+# =============================================================================
+# 用例 21) accept_length < 2.0 的夹具必须判 A7 FAIL —— 这条守的是「推测解码
+# 没生效也能混过验收」这个最容易被放过去的失败模式。
+# =============================================================================
+begin_case 21 "accept_length 低于 2.0 时 A7 判 FAIL"
+LOW_OUT="$CASE_DIR/summaries"
+timeout "$CASE_TIMEOUT" bash "$SUMMARIZER" \
+    --fixture "$REPO_ROOT/tests/fixtures/variant-low-accept" \
+    --out "$LOW_OUT" --ledger "$CASE_DIR/no-such-ledger.json" \
+    >"$CASE_DIR/stdout.log" 2>&1
+LAST_EXIT=$?
+assert_exit 0 "$LAST_EXIT" "未达标的运行照样产出总结（未达标是结论，不是脚本失败）"
+LOW_MD="$LOW_OUT/$LOWACCEPT_RUN_ID-summary.md"
+assert_file_exists "$LOW_MD" "生成了低 accept 变体的总结"
+A7_LINE="$(grep -F "**A7**" "$LOW_MD" | head -n1)"
+assert_contains_token "$A7_LINE" "1.12" "A7 行里是实测的 accept_length 1.12"
+assert_contains_token "$A7_LINE" "FAIL" "A7 判 FAIL"
+assert_not_contains_token "$A7_LINE" "PASS" "A7 绝不是 PASS"
+A1_LINE="$(grep -F "**A1**" "$LOW_MD" | head -n1)"
+assert_contains_token "$A1_LINE" "FAIL" "TPOT 5.60 ms 同时让 A1 判 FAIL"
+assert_file_contains "$LOW_MD" "没有复现博客数字" "吞吐远低于基线时明确说没复现"
+assert_file_contains "$LOW_MD" "台账" "总结里说明了 recipe 等信息的来源"
+end_case
+
+# =============================================================================
+# 用例 22) 测量值缺失时必须报错退出，绝不产出一份填着占位符的总结。
+# 一份写着「N/A」的总结会被当成「已经总结过了」，闸门就此放行 —— 那比没有总结更糟。
+# =============================================================================
+begin_case 22 "缺少必需测量值时 summarize-run 报错退出且不产出总结"
+BROKEN_RUN="$CASE_DIR/fixture/run-$FIXTURE_RUN_ID"
+mkdir -p "$BROKEN_RUN/results" "$BROKEN_RUN/logs"
+# 只留运行元数据与 status.json，两份 bench 输出故意缺席
+# （模拟服务起来了但 bench 没写出结果就收尾的情形）
+cp "$REPO_ROOT/tests/fixtures/run-$FIXTURE_RUN_ID/results/run_$FIXTURE_RUN_ID.json" \
+    "$BROKEN_RUN/results/"
+cp "$REPO_ROOT/tests/fixtures/run-$FIXTURE_RUN_ID/logs/status.json" "$BROKEN_RUN/logs/"
+BROKEN_OUT="$CASE_DIR/summaries"
+BROKEN_LEDGER="$CASE_DIR/stage-ledger.json"
+seed_ledger "$BROKEN_LEDGER" false
+timeout "$CASE_TIMEOUT" bash "$SUMMARIZER" --fixture "$CASE_DIR/fixture" \
+    --out "$BROKEN_OUT" --ledger "$BROKEN_LEDGER" >"$CASE_DIR/stdout.log" 2>&1
+LAST_EXIT=$?
+assert_exit 1 "$LAST_EXIT" "缺少必需测量值时以 1 退出"
+assert_file_contains "$CASE_DIR/stdout.log" "拒绝生成一份填着占位符的总结" "说明了为什么不生成"
+assert_file_contains "$CASE_DIR/stdout.log" "custom.tpot_p50_ms" "点名了缺哪个值"
+if [[ -z "$(find "$BROKEN_OUT" -name '*.md' 2>/dev/null)" ]]; then
+    pass_assert "一个 markdown 文件都没有产出"
+else
+    fail_assert "不应产出任何总结文件" "$(find "$BROKEN_OUT" -name '*.md')"
+fi
+assert_contains_token "$(ledger_field "$BROKEN_LEDGER" "$FIXTURE_RUN_ID" summary_done)" \
+    "false" "台账没有被翻成 summary_done=true（闸门必须继续拦着）"
+end_case
+
+# =============================================================================
 # 汇总
 # =============================================================================
 echo ""

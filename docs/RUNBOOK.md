@@ -27,7 +27,7 @@ CONFIRM_SPEND=yes bash scripts/run-staged.sh --stage plumbing
 
 - 没有它：脚本打印花费画像，然后以**退出码 2** 拒绝，什么都不会启动。
 - 退出码约定：`0` = 成功（或 dry-run 通过），`2` = 因为没授权而拒绝，
-  `1` = 真的出错了。
+  `3` = 有一次跑成功的运行还没写总结（见 1.1），`1` = 真的出错了。
 - 它只影响当前这一条命令，不要 `export`。
 
 零花费预演（任何 stage 都能这么先跑一遍）：
@@ -46,6 +46,47 @@ bash scripts/run-staged.sh --stage full --dry-run
 | 2 plumbing | `c5d.large` | 20 分钟 | $0.0295/hr | **约 $0.01** | 真机上的实例存储挂载、S3 流式回传、CloudWatch 心跳、Spot 中断轮询、墙上时钟看门狗、自终止 |
 | 3 gpu-smoke | `g6e.xlarge` | 60 分钟 | $1.20/hr | **约 $1.21** | `docker --gpus all`、NVIDIA runtime、`nvidia-smi` 遥测、SGLang 起服务、一次短 bench_serving |
 | 4 full | `p5en.48xlarge` | 240 分钟 | $26.6617/hr | **约 $106.65** | 按 recipe 跑 README 6.1 的两条完整 bench_serving |
+
+### 1.1 ⛔ 停一下：跑成功一次就先做总结
+
+**这条规则来自操作者的明确要求**：「如果在 h200 / b300 一旦跑成功过一次，记得停
+一下，做一下总结。」它不是靠记性，是机械执行的：
+
+- **成功的判据**：launcher 退出码 0 **并且** `logs/status.json` 的 phase 到了
+  `completed`。两个条件缺一个都算「还没成功」——退出码只说明实例申请下来了 /
+  观察循环结束了，不说明机器里那一轮 benchmark 跑完了。phase 问不出来时脚本
+  会明说「按还没成功处理」，不会自己宣布成功。
+- **成功之后**：`run-staged.sh` 打印停顿通知，**不再打印任何启动命令**，只给
+  收结果与写总结这两条。
+- **在总结落地之前**：再跑 `gpu-smoke` 或 `full` 会被拒绝，**退出码 3**。
+- **闸门顺序**：总结闸门排在 `CONFIRM_SPEND` 闸门**之前**。所以
+  `CONFIRM_SPEND=yes` 绕不过去 —— 否则一个无人值守的会话只要照常带着授权就能
+  接着按 $26.67/hr 烧下去，而唯一值得报告的那次结果还躺在 S3 里没人看。
+- `--dry-run` 是零花费的，只警告不拦。
+
+清掉闸门就两条命令（都零花费）：
+
+```bash
+RUN_ID=<那次成功的 RUN_ID>
+bash scripts/collect-results.sh --run-id "$RUN_ID" --region us-east-2
+bash scripts/summarize-run.sh   --run-id "$RUN_ID" --region us-east-2
+```
+
+`summarize-run.sh` 写出 `docs/run-summaries/<RUN_ID>-summary.md`（配置、两条 bench
+对 README 12.1 目标的实测值、与 README 12.2 的 ~266 tok/s / ~3.76 ms 基线对比、
+`accept_length` 对 A7 的 2.0 门槛、每张卡的 GPU 利用率与显存、花费、A1-A9 逐条
+判定、以及「这一次没有建立什么结论」），并把台账里那条记录的 `summary_done`
+置为 `true` —— 闸门随之放行。它**不会自动改 README.md**：12.12 那两张矩阵是要人
+过目的交付物，脚本只把该填的两行打印出来。
+
+真要在没有总结的情况下继续（应当是少数情况，输出与台账都会留痕）：
+
+```bash
+CONFIRM_SPEND=yes bash scripts/run-staged.sh --stage full --ack-summary \
+    --recipe scripts/recipes/h200-tp4-dspark-0731.env
+```
+
+退出码约定：`0` 成功 / `1` 出错 / `2` 缺 `CONFIRM_SPEND=yes` / **`3` 有成功运行未总结**。
 
 算术摊开写：
 
@@ -162,6 +203,7 @@ aws ssm start-session --target <instance-id> --region us-east-2
 ```bash
 bash scripts/collect-results.sh --run-id "$RUN_ID" --region us-east-2
 bash scripts/compare-results.sh
+bash scripts/summarize-run.sh   --run-id "$RUN_ID" --region us-east-2   # 见 1.1，跑成功后必做
 ```
 
 `collect-results.sh` 把 S3 上的原始产物转成 `compare-results.sh` 认的 schema，
@@ -173,7 +215,12 @@ bash scripts/compare-results.sh
 ```bash
 bash scripts/collect-results.sh --fixture tests/fixtures --out /tmp/rtest
 bash scripts/compare-results.sh /tmp/rtest
+bash scripts/summarize-run.sh   --fixture tests/fixtures --out /tmp/sumtest
 ```
+
+`summarize-run.sh` 不另写一套 bench 输出解析：它调用 `collect-results.sh` 做
+JSONL 与键名归一化，两个脚本永远同一套逻辑。必需的测量值（TPOT / TTFT / E2E /
+吞吐）一个都取不到时它**报错退出、不产出总结**，绝不给你一份填着占位符的文档。
 
 ---
 
@@ -236,7 +283,12 @@ export CHECKPOINT_S3_URI='s3://tpot-bench-results-077090643075-us-east-2/checkpo
 三个 recipe 在 `scripts/recipes/`，每个文件头部都写了上游依据和 checkpoint 的
 精确字节数。**换 recipe 只改一个 `--recipe` 参数，不需要改任何脚本。**
 
-**推荐顺序：A -> C -> B。理由：**
+> ⛔ **这个循环不是一口气跑完的。** 任何一发只要跑成功（退出码 0 且
+> phase=`completed`），循环就在那里停住：先按 1.1 收结果、写总结，再决定要不要
+>试下一个 recipe。没写总结就往下跑会被总结闸门以退出码 3 拒绝。
+> 换 recipe 的前提是**上一发失败了**，而不是「反正还有两个没试」。
+
+**失败之后的推荐顺序：A -> C -> B。理由：**
 
 1. **A `h200-tp4-fp4-eagle.env`（先跑这个）** —— 官方 instruct 权重、体积最小
    （159.6 GB）、cookbook 明确写了 Hopper 可跑的 W4A16 Marlin 路径、EAGLE 是
@@ -255,11 +307,15 @@ export CHECKPOINT_S3_URI='s3://tpot-bench-results-077090643075-us-east-2/checkpo
 CONFIRM_SPEND=yes bash scripts/run-staged.sh --stage full \
     --recipe scripts/recipes/h200-tp4-fp4-eagle.env --wait
 
-# 失败了先看死在哪个 phase，再换第二发
+# 成功 -> 到此为止，先做总结（1.1），后面两条这时候不要跑
+bash scripts/collect-results.sh --run-id "$RUN_ID" --region us-east-2
+bash scripts/summarize-run.sh   --run-id "$RUN_ID" --region us-east-2
+
+# 只有在第一发失败时：先看死在哪个 phase，再换第二发
 CONFIRM_SPEND=yes bash scripts/run-staged.sh --stage full \
     --recipe scripts/recipes/h200-tp4-dspark-0731.env --wait
 
-# 前两个都因为 MoE kernel / 精度问题失败，才上第三发
+# 只有在前两发都因为 MoE kernel / 精度问题失败时，才上第三发
 CONFIRM_SPEND=yes bash scripts/run-staged.sh --stage full \
     --recipe scripts/recipes/h200-tp4-fp8-eagle.env --wait
 ```
@@ -271,8 +327,17 @@ bash scripts/run-staged.sh --show-ledger
 ```
 
 台账里有 stage、RUN_ID、实例类型、实例 ID、起止时间、退出码、S3 前缀、用的哪个
-recipe。**迭代状态活在文件和 S3 里，不活在某个会话里** —— 上一次就是因为状态
-只在会话里，会话一死就什么都不剩。
+recipe，以及 FEAT-004 加的 `gpu_family` / `gpu_success` / `final_phase` /
+`summary_required` / `summary_done` / `summary_path` / `spot_price_usd_per_hour`
+（schema `tpot-bench-stage-ledger/2`，老的 `/1` 记录照样读得动）。
+`--show-ledger` 的「总结」列显示 `待写` / `已写`，末尾还会把等着总结的 RUN_ID
+单独再喊一遍。**迭代状态活在文件和 S3 里，不活在某个会话里** —— 上一次就是因为
+状态只在会话里，会话一死就什么都不剩。
+
+不带 `--wait` 启动时，脚本退出那一刻 `status.json` 往往还没上传，台账里那条记录
+的 phase 因此是空的。下一次执行 `run-staged.sh` 时，总结闸门会用只读的
+`aws s3 cp` 把这些记录的 phase 补成真值再判断（想完全离线就设 `LEDGER_REFRESH=false`）。
+所以「不带 --wait 起完就跑下一个 recipe」这条路也照样会被拦住。
 
 想自己造第四个 recipe：复制一份改 `SGLANG_EXTRA_ARGS`，同时把 `CHECKPOINT_GB`
 改成新权重的实际体积（`bash scripts/mirror-checkpoint.sh --model <repo>` 会打印
@@ -321,6 +386,9 @@ aws s3 ls "s3://$BUCKET/checkpoints/" --region us-east-2
 | phase 是 `deadline_exceeded` | `deadline_exceeded` | 墙上时钟看门狗按 `MAX_RUNTIME_MINUTES` 强制收工 | 这是**保护**不是故障。看日志判断慢在哪一步，必要时用 `--max-runtime-minutes` 放宽，但要重新算最坏花费 |
 | 完成了但 `compare-results.sh` 全是 N/A | `completed` | 结果没有经过 `collect-results.sh`，或 bench 输出键名变了 | 一定要用 `collect-results.sh` 做转换（它处理 JSONL 与 `median_*` 键名）；`bash tests/run-tests.sh` 的用例 13 就是守这条契约的 |
 | launcher 直接以 2 退出 | 还没启动 | 没有 `CONFIRM_SPEND=yes` | 这是设计如此。看完花费画像再显式授权 |
+| `run-staged.sh` 以 **3** 退出，说「已经有一次 GPU 运行成功了，但还没有写总结」 | 还没启动 | 总结闸门（第 1.1 节）。注意补 `CONFIRM_SPEND=yes` 也一样是 3 | 按它打印的两条命令收结果 + 写总结；确实要跳过就加 `--ack-summary`（会在输出和台账里留痕） |
+| `summarize-run.sh` 报「缺少必需的测量值」并以 1 退出 | 多半是 `starting_server` / `benchmarking` | 这次运行没有产出可用的 TPOT/TTFT，本质上算不上「跑成功过一次」 | 先看 `sglang-server.log` 与 `status.json` 的 phase。脚本刻意不生成一份填着占位符的总结 |
+| 总结里 A6 / A8 / A9 是「未评估」 | `completed` | 产物里确实没有判据：A6 需要 tp 覆盖全部卡、A8 需要 `sglang-server.log`、A9 需要一条 4K 输入的 bench | **未评估不等于通过。** 要补 A8 就确认日志同步上来了；要补 A9 就再跑一条 `--random-input 4000` |
 | launcher 报安全组有全网入站规则 | 还没启动 | `sg-0775ac013a1b6080d` 上又出现了 0.0.0.0/0 入站 | `bash scripts/setup-infra.sh --harden-existing`，或用 `--create-sg` 新建一个完全没有入站规则的组 |
 
 ---
@@ -337,5 +405,10 @@ bash scripts/launch-bench-ec2.sh --stage full --dry-run        # 只做 run-inst
 bash scripts/mirror-checkpoint.sh --model <repo>               # 权重体积与月租报告
 bash scripts/collect-results.sh --run-id <RUN_ID>              # 从 S3 收结果
 bash scripts/compare-results.sh                                # 对比表 + 性价比排名
-bash tests/run-tests.sh                                        # 15 个用例，零花费
+bash scripts/summarize-run.sh --run-id <RUN_ID>                # 写总结 + 放行总结闸门（1.1）
+bash scripts/summarize-run.sh --fixture tests/fixtures --out /tmp/sumtest  # 离线验证生成器
+bash scripts/run-staged.sh --stage full --ack-summary           # 明知未总结仍要继续（留痕）
+bash tests/run-tests.sh                                        # 22 个用例，零花费
 ```
+
+退出码：`0` 成功 / `1` 出错 / `2` 缺 `CONFIRM_SPEND=yes` / `3` 有成功运行未总结。

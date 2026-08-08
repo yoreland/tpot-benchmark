@@ -1,0 +1,26 @@
+{
+  "_fixture_note": "合成夹具，不是真实测量结果。与 tests/fixtures/run-20260807-150955-a1b2 的区别只有一个变量：accept_length 掉到 2.0 以下（推测解码基本没生效），TPOT 因此不达标。用来验证 summarize-run.sh 会把 README 12.9 的 A7 判成 FAIL 而不是放过去。",
+  "_fixture_synthetic": true,
+  "run_id": "20260807-171500-l0wa",
+  "stage": "full",
+  "region": "us-east-2",
+  "instance_id": "i-0000000000fixtur2",
+  "instance_type": "p5en.48xlarge",
+  "model": "deepseek-ai/DeepSeek-V4-Flash",
+  "sglang_image": "lmsysorg/sglang:latest",
+  "tp_size": 4,
+  "serve_args": "--model-path /mnt/nvme/models/deepseek-ai__DeepSeek-V4-Flash --tp 4 --mem-fraction-static 0.85 --trust-remote-code --host 0.0.0.0 --port 30000 --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --moe-runner-backend marlin --enable-metrics",
+  "custom_benchmark_file": "bench_custom_20260807-171500-l0wa.json",
+  "official_benchmark_file": "bench_official_20260807-171500-l0wa.json",
+  "custom_pass": false,
+  "official_pass": false,
+  "config": {
+    "input_tokens": 40000,
+    "output_tokens": 1500,
+    "official_input_tokens": 30000,
+    "official_output_tokens": 4096,
+    "num_prompts": 50,
+    "max_concurrency": 1
+  },
+  "elapsed_seconds": 5140
+}

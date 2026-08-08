@@ -1,0 +1,14 @@
+{
+  "run_id": "20260807-171500-l0wa",
+  "stage": "full",
+  "phase": "completed",
+  "exit_code": 0,
+  "message": "全流程完成（合成夹具：两条 bench 都未达标，但运行本身跑完了）",
+  "timestamp": "2026-08-07T18:41:40Z",
+  "elapsed_seconds": 5140,
+  "instance_id": "i-0000000000fixtur2",
+  "instance_type": "p5en.48xlarge",
+  "model": "deepseek-ai/DeepSeek-V4-Flash",
+  "dry_run": false,
+  "_fixture_synthetic": true
+}
