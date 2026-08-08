@@ -1,0 +1,9 @@
+{
+  "run_id": "20260807-150955-a1b2",
+  "stage": "full",
+  "phase": "completed",
+  "exit_code": 0,
+  "message": "全流程完成，结果已在 s3://tpot-bench-results-077090643075-us-east-2/runs/20260807-150955-a1b2/",
+  "timestamp": "2026-08-07T16:30:15Z",
+  "_fixture_synthetic": true
+}

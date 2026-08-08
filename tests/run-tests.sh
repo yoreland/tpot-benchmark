@@ -514,6 +514,185 @@ done
 end_case
 
 # =============================================================================
+# 用例 13) collect-results.sh 必须产出 compare-results.sh 真能读的 schema
+# 这条用例守的是一个很容易悄悄坏掉的契约：实例写的是 bench_serving 原始输出
+# (JSONL + median_* 键名)，而 compare-results.sh 读的是 .results.tpot_p50_ms。
+# 中间那层一坏，对比表全是 N/A，而且不会报错。
+# =============================================================================
+begin_case 13 "collect-results 夹具 -> compare-results 表格有真实数字"
+COLLECTOR="$REPO_ROOT/scripts/collect-results.sh"
+COMPARER="$REPO_ROOT/scripts/compare-results.sh"
+FIXTURES="$REPO_ROOT/tests/fixtures"
+OUT_DIR="$CASE_DIR/collected"
+timeout "$CASE_TIMEOUT" bash "$COLLECTOR" --fixture "$FIXTURES" --out "$OUT_DIR" \
+    >"$CASE_DIR/stdout.log" 2>&1
+LAST_EXIT=$?
+assert_exit 0 "$LAST_EXIT" "collect-results 处理夹具后以 0 退出"
+COLLECTED_JSON="$OUT_DIR/p5en-48xlarge_tp4_20260807_150955.json"
+assert_file_exists "$COLLECTED_JSON" "文件名沿用 run-benchmark.sh 的 <类型>_tp<N>_<时间戳>.json"
+assert_file_exists "$OUT_DIR/p5en-48xlarge_tp4_20260807_150955_summary.txt" "同时产出人类可读 summary"
+assert_file_contains "$CASE_DIR/stdout.log" "JSONL，共 2 条，取最后一条" \
+    "识别出 bench_serving 的 JSONL 形态并取最后一条记录"
+
+# 直接读 JSON，断言 compare-results.sh 依赖的每一个字段都在且是真数字
+SCHEMA_REPORT="$(python3 - "$COLLECTED_JSON" <<'PYEOF'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+meta = data["metadata"]
+problems = []
+for key in ("instance_type", "tp_size", "region", "timestamp"):
+    if not meta.get(key):
+        problems.append("metadata.%s 缺失" % key)
+for name, expect_in, expect_out in (("custom_benchmark", 40000, 1500),
+                                    ("official_benchmark", 30000, 4096)):
+    bench = data.get(name) or {}
+    cfg = bench.get("config") or {}
+    res = bench.get("results") or {}
+    if cfg.get("input_tokens") != expect_in or cfg.get("output_tokens") != expect_out:
+        problems.append("%s.config 与 README 6.1 不一致: %s" % (name, cfg))
+    if cfg.get("num_prompts") != 50 or cfg.get("max_concurrency") != 1:
+        problems.append("%s.config 的 prompts/并发与 README 6.1 不一致" % name)
+    for key in ("tpot_p50_ms", "tpot_p95_ms", "ttft_p50_ms", "ttft_p95_ms"):
+        if not isinstance(res.get(key), (int, float)) or res.get(key) <= 0:
+            problems.append("%s.results.%s 不是正数" % (name, key))
+    if "pass" not in bench:
+        problems.append("%s.pass 缺失" % name)
+print("OK" if not problems else "; ".join(problems))
+print(data["custom_benchmark"]["results"]["tpot_p50_ms"])
+print(data["official_benchmark"]["results"]["tpot_p50_ms"])
+PYEOF
+)"
+assert_contains_token "$(echo "$SCHEMA_REPORT" | sed -n 1p)" "OK" \
+    "产出的 JSON 含 compare-results.sh 需要的全部字段"
+assert_contains_token "$(echo "$SCHEMA_REPORT" | sed -n 2p)" "4.21" \
+    "自定义负载取到的是 JSONL 最后一条 (median_tpot_ms=4.21，不是第一条的 9.99)"
+assert_contains_token "$(echo "$SCHEMA_REPORT" | sed -n 3p)" "3.76" \
+    "官方对标取到 median_tpot_ms=3.76"
+
+# 再真的跑一遍 compare-results.sh，断言表格里是数字而不是 N/A
+timeout "$CASE_TIMEOUT" bash "$COMPARER" "$OUT_DIR" >"$CASE_DIR/compare.log" 2>&1
+LAST_EXIT=$?
+assert_exit 0 "$LAST_EXIT" "compare-results.sh 读取收集结果后以 0 退出"
+assert_file_contains "$CASE_DIR/compare.log" "4.21ms" "对比表里 TPOT P50 是真实数字"
+assert_file_contains "$CASE_DIR/compare.log" "1512.4ms" "对比表里 TTFT P50 是真实数字"
+assert_file_contains "$CASE_DIR/compare.log" "PASS" "对比表给出了达标判定"
+assert_file_not_contains "$CASE_DIR/compare.log" "没有可用的测试结果" \
+    "compare-results.sh 真的看到了传入目录（不是静默回退到默认 results/）"
+if grep -qE '^p5en\.48xlarge .*N/A' "$CASE_DIR/compare.log"; then
+    fail_assert "TPOT P50 列不得出现 N/A" "$(grep -E '^p5en' "$CASE_DIR/compare.log")"
+else
+    pass_assert "对比表里没有 N/A"
+fi
+end_case
+
+# =============================================================================
+# 用例 14) recipe 文件与推测解码 flag 拼写
+# =============================================================================
+begin_case 14 "三个 recipe 齐备、语法正确、DSpark 不带 EAGLE 专属参数"
+RECIPE_DIR="$REPO_ROOT/scripts/recipes"
+for r in h200-tp4-fp4-eagle.env h200-tp4-fp8-eagle.env h200-tp4-dspark-0731.env; do
+    if [[ -f "$RECIPE_DIR/$r" ]]; then
+        pass_assert "recipe 存在: $r"
+    else
+        fail_assert "recipe 缺失: $r"
+        continue
+    fi
+    if bash -n "$RECIPE_DIR/$r" 2>/dev/null; then
+        pass_assert "$r 能被 bash 解析（launcher 会把它拼进 user-data）"
+    else
+        fail_assert "$r 语法错误"
+    fi
+    if grep -qE '^#.*[0-9]{9,} 字节' "$RECIPE_DIR/$r"; then
+        pass_assert "$r 头部写明了 checkpoint 精确字节数"
+    else
+        fail_assert "$r 头部缺少 checkpoint 精确字节数"
+    fi
+    assert_file_contains "$RECIPE_DIR/$r" "--speculative-algorithm" "$r 用的是 --speculative-algorithm"
+done
+# 断言只针对「真正生效的行」：注释里会成段引用上游原文，包含这些 flag 名字是
+# 应该的，被引用不等于被传给服务端。
+effective_lines() {
+    local src="$1" dst="$2"
+    grep -vE '^[[:space:]]*(#|$)' "$src" >"$dst" || true
+    printf '%s' "$dst"
+}
+DSPARK_EFF="$(effective_lines "$RECIPE_DIR/h200-tp4-dspark-0731.env" "$CASE_DIR/dspark.eff")"
+FP4_EFF="$(effective_lines "$RECIPE_DIR/h200-tp4-fp4-eagle.env" "$CASE_DIR/fp4.eff")"
+FP8_EFF="$(effective_lines "$RECIPE_DIR/h200-tp4-fp8-eagle.env" "$CASE_DIR/fp8.eff")"
+assert_file_contains "$DSPARK_EFF" "--speculative-algorithm DSPARK" "DSpark recipe 指定了 DSPARK"
+for forbidden in "--speculative-num-steps" "--speculative-eagle-topk" \
+                 "--speculative-num-draft-tokens" "--speculative-draft-model-path"; do
+    assert_file_not_contains "$DSPARK_EFF" "$forbidden" \
+        "DSpark recipe 生效行里没有 $forbidden（上游明确要求省略）"
+done
+assert_file_not_contains "$FP4_EFF" "--enable-dp-attention" \
+    "FP4/Marlin recipe 生效行里不开 DP-attention（Hopper 上不支持）"
+assert_file_not_contains "$FP4_EFF" "--dp-size" "FP4/Marlin recipe 生效行里不传 DP 并行度"
+assert_file_contains "$FP8_EFF" "--enable-dp-attention" \
+    "FP8 重打包 recipe 才开 DP-attention"
+assert_file_contains "$FP4_EFF" "--moe-runner-backend marlin" \
+    "FP4 recipe 走 Hopper 的 W4A16 Marlin MoE runner"
+BAD_SPELLING="$(printf -- '--speculative-algo%s' ' ')"
+if grep -rqF -- "$BAD_SPELLING" "$REPO_ROOT/scripts/"; then
+    fail_assert "scripts/ 下仍存在错误拼写的 speculative flag" \
+        "$(grep -rnF -- "$BAD_SPELLING" "$REPO_ROOT/scripts/")"
+else
+    pass_assert "scripts/ 下没有错误拼写的 speculative flag"
+fi
+end_case
+
+# =============================================================================
+# 用例 15) run-staged.sh：preflight 之后的每一级都必须被花费闸门拦住
+# =============================================================================
+begin_case 15 "run-staged 三级付费 stage 在无 CONFIRM_SPEND 时全部拒绝"
+STAGED="$REPO_ROOT/scripts/run-staged.sh"
+BIN="$(make_case_bin)"
+STAGE_LEDGER="$CASE_DIR/stage-ledger.json"
+run_staged() {
+    # stub 在 PATH 最前，台账写到用例目录，绝不写真实 results/
+    timeout "$CASE_TIMEOUT" env -u CONFIRM_SPEND \
+        PATH="$BIN:$PATH" STUB_LOG="$STUB_LOG" \
+        STUB_SPOT_PRICE="$2" LEDGER="$STAGE_LEDGER" \
+        bash "$STAGED" --stage "$1" >"$CASE_DIR/staged-$1.log" 2>&1
+    LAST_EXIT=$?
+}
+for spec in "plumbing c5d.large 0.029500 0.01" \
+            "gpu-smoke g6e.xlarge 1.200000 1.20" \
+            "full p5en.48xlarge 26.661700 106.65"; do
+    # shellcheck disable=SC2086  # 故意按空格拆成四个字段
+    set -- $spec
+    stage="$1"; itype="$2"; price="$3"; worst="$4"
+    run_staged "$stage" "$price"
+    assert_exit 2 "$LAST_EXIT" "stage $stage 无 CONFIRM_SPEND 时以 2 退出"
+    assert_file_contains "$CASE_DIR/staged-$stage.log" "$itype" "stage $stage 打印了自己的实例类型 $itype"
+    assert_file_contains "$CASE_DIR/staged-$stage.log" "$worst" "stage $stage 打印了最坏花费 \$$worst"
+    assert_file_contains "$CASE_DIR/staged-$stage.log" "CONFIRM_SPEND=yes" "stage $stage 说明了如何显式授权"
+    # 必须是 run-staged 自己在闸门处拦住，而不是靠 launcher 兜底：
+    # 被拦住时 launcher 根本不该被调用，所以它的渲染步骤不会出现在输出里。
+    assert_file_not_contains "$CASE_DIR/staged-$stage.log" "渲染 user-data" \
+        "stage $stage 在自己的闸门处就拒绝了，没有把 launcher 叫起来"
+done
+assert_file_not_contains "$STUB_LOG" "run-instances" "三级 stage 都没有发起 run-instances"
+assert_file_exists "$STAGE_LEDGER" "阶段台账已生成（迭代状态落在文件里）"
+LEDGER_REPORT="$(python3 - "$STAGE_LEDGER" <<'PYEOF'
+import json
+import sys
+
+entries = json.load(open(sys.argv[1], encoding="utf-8"))["entries"]
+stages = [e["stage"] for e in entries]
+statuses = {e["stage"]: e["exit_status"] for e in entries}
+required = {"plumbing", "gpu-smoke", "full"}
+missing = required - set(stages)
+wrong = [s for s in required - missing if statuses[s] != 2]
+print("OK" if not missing and not wrong else "missing=%s wrong=%s" % (missing, wrong))
+PYEOF
+)"
+assert_contains_token "$LEDGER_REPORT" "OK" "台账为三级 stage 各记了一条 exit_status=2 的拒绝记录"
+end_case
+
+# =============================================================================
 # 汇总
 # =============================================================================
 echo ""

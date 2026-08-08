@@ -7,6 +7,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RESULTS_DIR="${1:-$(cd "$SCRIPT_DIR/.." && pwd)/results}"
+# 下面的 python 段是无参数 heredoc，只能从环境里读目录；不 export 的话它会退回
+# 相对路径 "results"，于是传进来的目录被静默忽略、表格永远是空的。
+export RESULTS_DIR
 
 if [[ ! -d "$RESULTS_DIR" ]]; then
     echo "错误: 结果目录不存在: $RESULTS_DIR" >&2

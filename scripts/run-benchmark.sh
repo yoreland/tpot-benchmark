@@ -28,9 +28,21 @@ EAGLE_TOPK="${EAGLE_TOPK:-1}"
 DRAFT_TOKENS="${DRAFT_TOKENS:-4}"
 
 # 张量并行 / 数据并行配置
+# DP-attention 默认关闭：上游 cookbook 的 Hopper 注记说明原始 FP4 checkpoint 走
+# W4A16 Marlin 路径时是 TP-only，DP-attention / DeepEP 都用不了。以前这里默认
+# --dp 8 --enable-dp-attention 和 --tp 8 一起发出去，对 H200 目标是自相矛盾的
+# 配置。要用 DP 就显式 --dp N 并把 ENABLE_DP_ATTENTION=true 打开（仅限
+# sgl-project/DeepSeek-V4-Flash-FP8 这类重打包 FP8 权重）。
 TP_SIZE="${TP_SIZE:-8}"
-DP_SIZE="${DP_SIZE:-8}"
-ENABLE_DP_ATTENTION="${ENABLE_DP_ATTENTION:-true}"
+DP_SIZE="${DP_SIZE:-}"
+ENABLE_DP_ATTENTION="${ENABLE_DP_ATTENTION:-false}"
+
+# 本地 NVMe 在宿主机上的路径（hostPath）。README 9.1 记录了三种环境不一样：
+#   自建 EKS RAID0 : /mnt/k8s-disks/0/   （本脚本默认）
+#   HyperPod       : /opt/dlami/nvme/
+#   裸 EC2         : /mnt/nvme/          （见 scripts/bootstrap/bench-bootstrap.sh）
+# 写错的后果就是权重落到小根盘上，这正是 2026-08-07 那次 $353 的直接原因。
+NVME_HOST_PATH="${NVME_HOST_PATH:-/mnt/k8s-disks/0}"
 
 # 内部常量
 DEPLOY_NAME="sglang-benchmark"
@@ -57,7 +69,9 @@ usage() {
   --instance-type TYPE      实例类型 (默认: $INSTANCE_TYPE)
   --model MODEL             模型名称 (默认: $MODEL_NAME)
   --tp SIZE                 张量并行度 (默认: $TP_SIZE)
-  --dp SIZE                 数据并行度 (默认: $DP_SIZE)
+  --dp SIZE                 数据并行度 (默认: 不启用；只有重打包 FP8 权重才该开)
+  --nvme-host-path PATH     宿主机本地 NVMe 路径 (默认: $NVME_HOST_PATH,
+                            HyperPod 用 /opt/dlami/nvme)
   --input-tokens N          输入 token 数 (默认: $INPUT_TOKENS)
   --output-tokens N         输出 token 数 (默认: $OUTPUT_TOKENS)
   --num-prompts N           请求数量 (默认: $NUM_PROMPTS)
@@ -84,7 +98,8 @@ while [[ $# -gt 0 ]]; do
         --instance-type) INSTANCE_TYPE="$2"; shift 2 ;;
         --model) MODEL_NAME="$2"; shift 2 ;;
         --tp) TP_SIZE="$2"; shift 2 ;;
-        --dp) DP_SIZE="$2"; shift 2 ;;
+        --dp) DP_SIZE="$2"; ENABLE_DP_ATTENTION=true; shift 2 ;;
+        --nvme-host-path) NVME_HOST_PATH="$2"; shift 2 ;;
         --input-tokens) INPUT_TOKENS="$2"; shift 2 ;;
         --output-tokens) OUTPUT_TOKENS="$2"; shift 2 ;;
         --num-prompts) NUM_PROMPTS="$2"; shift 2 ;;
@@ -171,11 +186,16 @@ log "部署 SGLang 推理服务..."
 SGLANG_ARGS="python3 -m sglang.launch_server"
 SGLANG_ARGS+=" --model-path $MODEL_NAME"
 SGLANG_ARGS+=" --tp $TP_SIZE"
-SGLANG_ARGS+=" --dp $DP_SIZE"
+# DP 相关参数改为「按需加」：不给 --dp 就一个字节都不发
+if [[ -n "$DP_SIZE" ]]; then
+    SGLANG_ARGS+=" --dp-size $DP_SIZE"
+fi
 if [[ "$ENABLE_DP_ATTENTION" == "true" ]]; then
     SGLANG_ARGS+=" --enable-dp-attention"
 fi
-SGLANG_ARGS+=" --speculative-algo EAGLE"
+# 正确拼写是 --speculative-algorithm（上游 server_arguments 文档与 cookbook 一致）；
+# 以前写的「--speculative-algo」少了 rithm，根本不是有效 flag，启动时会直接失败
+SGLANG_ARGS+=" --speculative-algorithm EAGLE"
 SGLANG_ARGS+=" --speculative-num-steps $NUM_STEPS"
 SGLANG_ARGS+=" --speculative-eagle-topk $EAGLE_TOPK"
 SGLANG_ARGS+=" --speculative-num-draft-tokens $DRAFT_TOKENS"
@@ -247,11 +267,11 @@ spec:
           sizeLimit: 64Gi
       - name: nvme-hf
         hostPath:
-          path: /mnt/k8s-disks/0/hf-cache
+          path: $NVME_HOST_PATH/hf-cache
           type: DirectoryOrCreate
       - name: nvme-tmp
         hostPath:
-          path: /mnt/k8s-disks/0/tmp
+          path: $NVME_HOST_PATH/tmp
           type: DirectoryOrCreate
       tolerations:
       - key: nvidia.com/gpu
@@ -360,16 +380,54 @@ parse_and_judge() {
 import json
 import sys
 
-with open("$result_file") as f:
-    data = json.load(f)
 
-# 提取关键指标
-tpot_p50 = data.get("tpot_p50_ms", data.get("inter_token_latency_p50_ms", 0))
-tpot_p95 = data.get("tpot_p95_ms", data.get("inter_token_latency_p95_ms", 0))
-ttft_p50 = data.get("ttft_p50_ms", data.get("time_to_first_token_p50_ms", 0))
-ttft_p95 = data.get("ttft_p95_ms", data.get("time_to_first_token_p95_ms", 0))
-e2e_p50 = data.get("e2e_latency_p50_ms", data.get("request_latency_p50_ms", 0))
-throughput = data.get("output_throughput_tok_per_s", data.get("output_token_throughput", 0))
+def load_bench(path):
+    """bench_serving --output-file 是「追加一行 JSON」的 JSONL，json.load 读不了。
+
+    先试整体解析（兼容手工造的单对象文件），失败再逐行解析并取最后一条记录。
+    """
+    with open(path) as fh:
+        raw = fh.read().strip()
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    last = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            last = rec
+    return last
+
+
+def pick(data, *keys):
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return 0
+
+
+data = load_bench("$result_file")
+
+# 提取关键指标。当前 sglang.benchmark.serving 写的是 median_* / p95_* 这一套，
+# median_* 就是 P50；后面几个候选是历史/别名写法，保留兼容。
+tpot_p50 = pick(data, "median_tpot_ms", "tpot_p50_ms", "inter_token_latency_p50_ms", "median_itl_ms")
+tpot_p95 = pick(data, "p95_tpot_ms", "tpot_p95_ms", "inter_token_latency_p95_ms", "p95_itl_ms")
+ttft_p50 = pick(data, "median_ttft_ms", "ttft_p50_ms", "time_to_first_token_p50_ms")
+ttft_p95 = pick(data, "p95_ttft_ms", "ttft_p95_ms", "time_to_first_token_p95_ms")
+e2e_p50 = pick(data, "median_e2e_latency_ms", "e2e_latency_p50_ms", "request_latency_p50_ms")
+throughput = pick(data, "output_throughput", "output_throughput_tok_per_s", "output_token_throughput")
 
 # 验收标准判断
 tpot_pass = tpot_p50 <= $TPOT_THRESHOLD_MS if tpot_p50 > 0 else False
@@ -413,18 +471,60 @@ python3 <<PYEOF
 import json
 from datetime import datetime
 
-custom = {}
-official = {}
-try:
-    with open("$BENCH_OUTPUT") as f:
-        custom = json.load(f)
-except:
-    pass
-try:
-    with open("$BENCH_OFFICIAL") as f:
-        official = json.load(f)
-except:
-    pass
+
+def load_bench(path):
+    """同上：bench_serving 的 --output-file 是 JSONL，取最后一条记录。"""
+    try:
+        with open(path) as fh:
+            raw = fh.read().strip()
+    except OSError:
+        return {}
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    last = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            last = rec
+    return last
+
+
+def pick(data, *keys):
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return 0
+
+
+def normalize(raw):
+    """补上 compare-results.sh 读的键名，同时保留 bench_serving 的原始键。"""
+    if not raw:
+        return {}
+    out = dict(raw)
+    out["tpot_p50_ms"] = pick(raw, "median_tpot_ms", "tpot_p50_ms", "inter_token_latency_p50_ms", "median_itl_ms")
+    out["tpot_p95_ms"] = pick(raw, "p95_tpot_ms", "tpot_p95_ms", "inter_token_latency_p95_ms", "p95_itl_ms")
+    out["ttft_p50_ms"] = pick(raw, "median_ttft_ms", "ttft_p50_ms", "time_to_first_token_p50_ms")
+    out["ttft_p95_ms"] = pick(raw, "p95_ttft_ms", "ttft_p95_ms", "time_to_first_token_p95_ms")
+    out["e2e_latency_p50_ms"] = pick(raw, "median_e2e_latency_ms", "e2e_latency_p50_ms", "request_latency_p50_ms")
+    out["output_throughput_tok_per_s"] = pick(raw, "output_throughput", "output_throughput_tok_per_s", "output_token_throughput")
+    return out
+
+
+custom = normalize(load_bench("$BENCH_OUTPUT"))
+official = normalize(load_bench("$BENCH_OFFICIAL"))
 
 result = {
     "metadata": {
@@ -434,7 +534,7 @@ result = {
         "cluster_name": "$CLUSTER_NAME",
         "model": "$MODEL_NAME",
         "tp_size": $TP_SIZE,
-        "dp_size": $DP_SIZE,
+        "dp_size": ${DP_SIZE:-0},
         "sglang_image": "$SGLANG_IMAGE",
         "eagle_config": {
             "num_steps": $NUM_STEPS,
@@ -483,7 +583,7 @@ SGLang Benchmark 测试报告
 集群:         $CLUSTER_NAME ($REGION)
 实例类型:     $INSTANCE_TYPE
 模型:         $MODEL_NAME
-配置:         TP=$TP_SIZE, DP=$DP_SIZE, EAGLE(steps=$NUM_STEPS, topk=$EAGLE_TOPK, draft=$DRAFT_TOKENS)
+配置:         TP=$TP_SIZE, DP=${DP_SIZE:-未启用}, EAGLE(steps=$NUM_STEPS, topk=$EAGLE_TOPK, draft=$DRAFT_TOKENS)
 镜像:         $SGLANG_IMAGE
 
 ----------------------------------------------------------
