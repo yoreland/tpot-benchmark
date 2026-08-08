@@ -465,6 +465,30 @@ discover_instance_store() {
 setup_storage() {
     section "Step b) 本地 NVMe 发现 / RAID0 / 挂载"
     set_phase storage "枚举本地实例存储设备"
+
+    # ---- 快速路径：DLAMI 已经将 NVMe 设置好 ----
+    # Deep Learning AMI 会自动创建 LVM (vg.01/lv_ephemeral) 并挂载到 /opt/dlami/nvme。
+    # awslabs/awsome-distributed-ai 的所有样例都直接使用这个路径，不自己做 RAID0。
+    # 如果该路径已挂载且可写，直接用它，不拆不重建。
+    local dlami_nvme="/opt/dlami/nvme"
+    if mountpoint -q "$dlami_nvme" 2>/dev/null; then
+        local avail_gb
+        avail_gb="$(df -BG --output=avail "$dlami_nvme" 2>/dev/null | tail -1 | tr -d ' G')"
+        if [[ -n "$avail_gb" && "$avail_gb" -gt 10 ]]; then
+            log "检测到 DLAMI 已挂载 NVMe 于 $dlami_nvme（可用 ${avail_gb}G），直接使用"
+            NVME_MOUNT="$dlami_nvme"
+            mkdir -p "$NVME_MOUNT/results" "$NVME_MOUNT/hf-cache" "$NVME_MOUNT/models" "$NVME_MOUNT/tmp"
+            RESULTS_DIR="$NVME_MOUNT/results"
+            HF_CACHE_DIR="$NVME_MOUNT/hf-cache"
+            MODEL_ROOT="$NVME_MOUNT/models"
+            export HF_HOME="$HF_CACHE_DIR" HF_HUB_CACHE="$HF_CACHE_DIR" TMPDIR="$NVME_MOUNT/tmp"
+            log "HF_HOME=$HF_CACHE_DIR  HF_HUB_CACHE=$HF_CACHE_DIR  TMPDIR=$NVME_MOUNT/tmp"
+            assert_free_space "初始"
+            return 0
+        fi
+    fi
+
+    # ---- 常规路径：自行发现并挂载 NVMe ----
     discover_instance_store
 
     if [[ "${#NVME_DEVICES[@]}" -eq 0 ]]; then
