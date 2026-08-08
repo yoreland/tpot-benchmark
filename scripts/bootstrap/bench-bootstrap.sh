@@ -487,22 +487,58 @@ setup_storage() {
 
     mkdir -p "$NVME_MOUNT"
     if [[ -n "$NVME_TARGET" ]]; then
-        # Deep Learning AMI 可能已自动挂载 instance store；必须先卸载才能格式化
+        # Deep Learning AMI / udev / systemd 可能持有 instance store 设备：
+        #   1) 已被 mount（findmnt 能看到）
+        #   2) 被 blkid/wipefs/mdadm probe 独占（findmnt 看不到，但 fuser 能看到）
+        #   3) 有残留 partition table 或 md superblock
+        # 全部处理，顺序：umount -> fuser -mk -> wipefs -> udevadm settle -> mkfs
+
+        # 先卸载 NVME_TARGET 本身
         local existing_mount
         existing_mount="$(findmnt -n -o TARGET "$NVME_TARGET" 2>/dev/null || true)"
         if [[ -n "$existing_mount" ]]; then
             log "检测到 $NVME_TARGET 已挂载于 $existing_mount，先 umount"
-            run_destructive umount "$NVME_TARGET" || run_destructive umount -l "$NVME_TARGET"
+            run_destructive umount "$NVME_TARGET" || run_destructive umount -l "$NVME_TARGET" || true
         fi
+
         # RAID 成员也可能被 auto-mount（多盘场景）
         for dev in "${NVME_DEVICES[@]}"; do
             local m
             m="$(findmnt -n -o TARGET "$dev" 2>/dev/null || true)"
             if [[ -n "$m" && "$m" != "$NVME_MOUNT" ]]; then
                 log "检测到成员盘 $dev 已挂载于 $m，先 umount"
-                run_destructive umount "$dev" || run_destructive umount -l "$dev"
+                run_destructive umount "$dev" || run_destructive umount -l "$dev" || true
             fi
         done
+
+        # 杀掉所有仍在使用该设备的进程（blkid probe, lvm scan 等）
+        if command -v fuser >/dev/null 2>&1; then
+            fuser -mk "$NVME_TARGET" 2>/dev/null || true
+            for dev in "${NVME_DEVICES[@]}"; do
+                fuser -mk "$dev" 2>/dev/null || true
+            done
+        fi
+
+        # 清残留签名，防止 mdadm auto-assemble 或 LVM 扫描再次抢占
+        if command -v wipefs >/dev/null 2>&1; then
+            log "wipefs -a $NVME_TARGET"
+            wipefs -a "$NVME_TARGET" 2>/dev/null || true
+            for dev in "${NVME_DEVICES[@]}"; do
+                wipefs -a "$dev" 2>/dev/null || true
+            done
+        fi
+
+        # 等 udev 事件队列清空
+        udevadm settle --timeout=5 2>/dev/null || true
+
+        # 如果 mdadm 曾经 assemble 了 RAID，先 stop（仅多盘场景或检测到 superblock）
+        if command -v mdadm >/dev/null 2>&1 && [[ "${#NVME_DEVICES[@]}" -gt 1 ]]; then
+            mdadm --stop "$NVME_TARGET" 2>/dev/null || true
+            for dev in "${NVME_DEVICES[@]}"; do
+                mdadm --stop "$dev" 2>/dev/null || true
+                mdadm --zero-superblock "$dev" 2>/dev/null || true
+            done
+        fi
 
         if command -v mkfs.xfs >/dev/null 2>&1; then
             run_destructive mkfs.xfs -f "$NVME_TARGET"
