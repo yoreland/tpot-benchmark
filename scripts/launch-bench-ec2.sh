@@ -26,11 +26,21 @@ STAGE="${STAGE:-full}"                    # plumbing | gpu-smoke | full
 EXPECTED_ACCOUNT="${EXPECTED_ACCOUNT:-077090643075}"
 
 # 网络（FEAT-001 已把 sg-0775ac013a1b6080d 的全网 SSH 入站规则撤销，现在入站为空）
-SUBNET_ID="${SUBNET_ID:-subnet-09bfc4e5573173d64}"
-SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-0775ac013a1b6080d}"
+# 注意：这些默认值是 us-east-2 的资源。当 --region 指向其他 Region 时，下面的
+# auto-resolve 逻辑会自动从目标 Region 的 default VPC 解析出正确的子网与安全组。
+SUBNET_ID="${SUBNET_ID:-}"
+SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-}"
 SG_NAME="${SG_NAME:-tpot-bench-noingress-sg}"
-VPC_ID="${VPC_ID:-vpc-0351dd9bb2f63a9e1}"
+VPC_ID="${VPC_ID:-}"
 CREATE_SG="${CREATE_SG:-false}"
+
+# 各 Region 已知的资源 ID（避免每次都查 API；新 Region 走 auto-resolve）
+_KNOWN_SUBNET_us_east_2a="subnet-09bfc4e5573173d64"
+_KNOWN_SG_us_east_2="sg-0775ac013a1b6080d"
+_KNOWN_VPC_us_east_2="vpc-0351dd9bb2f63a9e1"
+_KNOWN_SUBNET_us_east_1a="subnet-0ae36a5845b616649"
+_KNOWN_SG_us_east_1="sg-0b381611fbbee9dcd"
+_KNOWN_VPC_us_east_1="vpc-032f909768a4fba75"
 ALLOW_SSH_FROM="${ALLOW_SSH_FROM:-}"      # 留空=不开任何入站；auto=解析本机出口 IP/32
 
 # FEAT-001 建好的资源
@@ -288,6 +298,69 @@ log "RUN_ID         : $RUN_ID"
 log "INSTANCE_TYPE  : $INSTANCE_TYPE"
 log "MODEL          : $MODEL_NAME"
 log "结果桶         : s3://$BUCKET"
+
+# =============================================================================
+# Step a-2) 网络资源 auto-resolve
+# 当 --subnet-id / --security-group-id / VPC_ID 未显式传入时，先看已知映射表，
+# 再退回 describe-* API 从目标 Region 的 default VPC 动态解析。
+# =============================================================================
+_resolve_region_key="${REGION//-/_}"  # e.g. us_east_1
+_resolve_az_key="${AZ//-/_}"         # e.g. us_east_1a
+
+if [[ -z "$VPC_ID" ]]; then
+    _known_vpc_var="_KNOWN_VPC_${_resolve_region_key}"
+    if [[ -n "${!_known_vpc_var:-}" ]]; then
+        VPC_ID="${!_known_vpc_var}"
+        log "网络(VPC): 使用已知映射 $VPC_ID"
+    else
+        VPC_ID=$(aws ec2 describe-vpcs --region "$REGION" \
+            --filters "Name=is-default,Values=true" \
+            --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
+        if [[ -z "$VPC_ID" || "$VPC_ID" == "None" ]]; then
+            echo "错误: $REGION 没有 default VPC，请用 --subnet-id / --security-group-id 显式指定" >&2
+            exit 1
+        fi
+        log "网络(VPC): auto-resolve -> $VPC_ID"
+    fi
+fi
+
+if [[ -z "$SUBNET_ID" ]]; then
+    _known_subnet_var="_KNOWN_SUBNET_${_resolve_az_key}"
+    if [[ -n "${!_known_subnet_var:-}" ]]; then
+        SUBNET_ID="${!_known_subnet_var}"
+        log "网络(子网): 使用已知映射 $SUBNET_ID ($AZ)"
+    else
+        SUBNET_ID=$(aws ec2 describe-subnets --region "$REGION" \
+            --filters "Name=vpc-id,Values=$VPC_ID" "Name=availability-zone,Values=$AZ" \
+            --query 'Subnets[0].SubnetId' --output text 2>/dev/null || echo "")
+        if [[ -z "$SUBNET_ID" || "$SUBNET_ID" == "None" ]]; then
+            echo "错误: $AZ 的 default VPC ($VPC_ID) 没有子网，请用 --subnet-id 显式指定" >&2
+            exit 1
+        fi
+        log "网络(子网): auto-resolve -> $SUBNET_ID ($AZ)"
+    fi
+fi
+
+if [[ -z "$SECURITY_GROUP_ID" ]]; then
+    _known_sg_var="_KNOWN_SG_${_resolve_region_key}"
+    if [[ -n "${!_known_sg_var:-}" ]]; then
+        SECURITY_GROUP_ID="${!_known_sg_var}"
+        log "网络(安全组): 使用已知映射 $SECURITY_GROUP_ID"
+    else
+        # 先查看是否已有名为 tpot-bench-noingress-sg 的安全组
+        SECURITY_GROUP_ID=$(aws ec2 describe-security-groups --region "$REGION" \
+            --filters "Name=group-name,Values=$SG_NAME" "Name=vpc-id,Values=$VPC_ID" \
+            --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
+        if [[ -z "$SECURITY_GROUP_ID" || "$SECURITY_GROUP_ID" == "None" ]]; then
+            # 标记需要创建
+            CREATE_SG=true
+            SECURITY_GROUP_ID="pending-create"
+            log "网络(安全组): $REGION 没有 $SG_NAME，将在 Step g) 自动创建"
+        else
+            log "网络(安全组): auto-resolve -> $SECURITY_GROUP_ID ($SG_NAME)"
+        fi
+    fi
+fi
 
 # =============================================================================
 # Step b) 渲染 user-data 并用 bash -n 校验（在任何 AWS 调用之前）

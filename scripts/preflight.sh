@@ -25,9 +25,15 @@ MODEL_NAME="${MODEL_NAME:-deepseek-ai/DeepSeek-V4-Flash}"
 BUCKET="${BUCKET:-}"                       # 留空则按 tpot-bench-results-<account>-<region> 推导
 IMAGE_ID="${IMAGE_ID:-}"                   # 留空则动态解析 DLAMI
 MAX_PRICE="${MAX_PRICE:-35.00}"            # Spot 价格上限（上次启动用的就是 35.00）
-SUBNET_ID="${SUBNET_ID:-subnet-09bfc4e5573173d64}"
-SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-0775ac013a1b6080d}"
+SUBNET_ID="${SUBNET_ID:-}"
+SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-}"
 INSTANCE_PROFILE_NAME="${INSTANCE_PROFILE_NAME:-tpot-bench-ec2-profile}"
+
+# 各 Region 已知的网络资源 ID（避免每次都查 API；新 Region 走 auto-resolve）
+_KNOWN_SUBNET_us_east_2a="subnet-09bfc4e5573173d64"
+_KNOWN_SG_us_east_2="sg-0775ac013a1b6080d"
+_KNOWN_SUBNET_us_east_1a="subnet-0ae36a5845b616649"
+_KNOWN_SG_us_east_1="sg-0b381611fbbee9dcd"
 
 # 期望的 AWS 账号（防止在错误账号里花钱）
 EXPECTED_ACCOUNT="${EXPECTED_ACCOUNT:-077090643075}"
@@ -224,6 +230,60 @@ if [[ -z "$BUCKET" ]]; then
     BUCKET="tpot-bench-results-${ACCOUNT_ID:-$EXPECTED_ACCOUNT}-${REGION}"
 fi
 log "  结果桶  : $BUCKET"
+
+# =============================================================================
+# 网络资源 auto-resolve：子网与安全组
+# 当未通过 --subnet-id / --security-group-id 显式指定时，先查已知映射表，
+# 再退回 describe-* API 从目标 Region 的 default VPC 动态解析。
+# =============================================================================
+_resolve_region_key="${REGION//-/_}"  # e.g. us_east_1
+_resolve_az_key="${AZ//-/_}"         # e.g. us_east_1a
+
+if [[ -z "$SUBNET_ID" ]]; then
+    _known_subnet_var="_KNOWN_SUBNET_${_resolve_az_key}"
+    if [[ -n "${!_known_subnet_var:-}" ]]; then
+        SUBNET_ID="${!_known_subnet_var}"
+        log "  子网(已知): $SUBNET_ID ($AZ)"
+    else
+        _vpc_id=$(aws ec2 describe-vpcs --region "$REGION" \
+            --filters "Name=is-default,Values=true" \
+            --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
+        if [[ -n "$_vpc_id" && "$_vpc_id" != "None" ]]; then
+            SUBNET_ID=$(aws ec2 describe-subnets --region "$REGION" \
+                --filters "Name=vpc-id,Values=$_vpc_id" "Name=availability-zone,Values=$AZ" \
+                --query 'Subnets[0].SubnetId' --output text 2>/dev/null || echo "")
+        fi
+        if [[ -z "$SUBNET_ID" || "$SUBNET_ID" == "None" ]]; then
+            SUBNET_ID="UNRESOLVED"
+            log "  子网: 无法从 $AZ 的 default VPC 自动解析，Check 7 将报 FAIL"
+        else
+            log "  子网(auto): $SUBNET_ID ($AZ)"
+        fi
+    fi
+fi
+
+if [[ -z "$SECURITY_GROUP_ID" ]]; then
+    _known_sg_var="_KNOWN_SG_${_resolve_region_key}"
+    if [[ -n "${!_known_sg_var:-}" ]]; then
+        SECURITY_GROUP_ID="${!_known_sg_var}"
+        log "  安全组(已知): $SECURITY_GROUP_ID"
+    else
+        _vpc_id="${_vpc_id:-$(aws ec2 describe-vpcs --region "$REGION" \
+            --filters "Name=is-default,Values=true" \
+            --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")}"
+        if [[ -n "$_vpc_id" && "$_vpc_id" != "None" ]]; then
+            SECURITY_GROUP_ID=$(aws ec2 describe-security-groups --region "$REGION" \
+                --filters "Name=group-name,Values=tpot-bench-noingress-sg" "Name=vpc-id,Values=$_vpc_id" \
+                --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
+        fi
+        if [[ -z "$SECURITY_GROUP_ID" || "$SECURITY_GROUP_ID" == "None" ]]; then
+            SECURITY_GROUP_ID="UNRESOLVED"
+            log "  安全组: 无法自动解析，Check 7 将报 FAIL。请先运行 setup-infra.sh --region $REGION"
+        else
+            log "  安全组(auto): $SECURITY_GROUP_ID"
+        fi
+    fi
+fi
 
 # =============================================================================
 # Check 2) Spot 配额 vs 实例 vCPU 需求

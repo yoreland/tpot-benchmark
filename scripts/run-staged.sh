@@ -43,6 +43,8 @@ REGION="${REGION:-us-east-2}"
 AZ="${AZ:-us-east-2a}"
 ACCOUNT_ID="${ACCOUNT_ID:-077090643075}"
 BUCKET="${BUCKET:-}"                 # 留空则推导 tpot-bench-results-<account>-<region>
+SUBNET_ID="${SUBNET_ID:-}"           # 留空则由下游脚本 auto-resolve
+SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-}"  # 留空则由下游脚本 auto-resolve
 RECIPE_FILE="${RECIPE_FILE:-}"
 CHECKPOINT_S3_URI="${CHECKPOINT_S3_URI:-}"
 DRY_RUN=false
@@ -82,6 +84,8 @@ usage() {
   --region REGION           AWS Region (默认: $REGION)
   --az AZ                   可用区 (默认: $AZ)
   --bucket NAME             结果桶 (默认: tpot-bench-results-<account>-<region>)
+  --subnet-id ID            子网（留空则 auto-resolve 目标 Region 的 default VPC）
+  --security-group-id ID    安全组（留空则 auto-resolve tpot-bench-noingress-sg）
   --dry-run                 只渲染 + run-instances --dry-run，零花费
   --wait                    真实启动后持续观察（无需 SSH）
   --show-ledger             只打印阶段台账，不执行任何 stage
@@ -119,6 +123,8 @@ while [[ $# -gt 0 ]]; do
         --region) REGION="$2"; shift 2 ;;
         --az) AZ="$2"; shift 2 ;;
         --bucket) BUCKET="$2"; shift 2 ;;
+        --subnet-id) SUBNET_ID="$2"; shift 2 ;;
+        --security-group-id) SECURITY_GROUP_ID="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --wait) WAIT_MODE=true; shift ;;
         --show-ledger) SHOW_LEDGER_ONLY=true; shift ;;
@@ -593,6 +599,8 @@ if [[ "$STAGE" == "preflight" ]]; then
     fi
     STARTED="$(now_iso)"
     PRE_ARGS=(--region "$REGION" --az "$AZ" --bucket "$BUCKET")
+    [[ -n "$SUBNET_ID" ]] && PRE_ARGS+=(--subnet-id "$SUBNET_ID")
+    [[ -n "$SECURITY_GROUP_ID" ]] && PRE_ARGS+=(--security-group-id "$SECURITY_GROUP_ID")
     PRE_STATUS=0
     bash "$PREFLIGHT" "${PRE_ARGS[@]}" || PRE_STATUS=$?
     ledger_append preflight "-" "$STAGE_INSTANCE" "-" "$STARTED" "$(now_iso)" \
@@ -719,6 +727,8 @@ if [[ ! -f "$LAUNCHER" ]]; then
 fi
 
 LAUNCH_ARGS=(--stage "$STAGE" --region "$REGION" --az "$AZ" --bucket "$BUCKET")
+[[ -n "$SUBNET_ID" ]] && LAUNCH_ARGS+=(--subnet-id "$SUBNET_ID")
+[[ -n "$SECURITY_GROUP_ID" ]] && LAUNCH_ARGS+=(--security-group-id "$SECURITY_GROUP_ID")
 [[ -n "$RECIPE_FILE" ]] && LAUNCH_ARGS+=(--recipe "$RECIPE_FILE")
 [[ -n "$CHECKPOINT_S3_URI" ]] && LAUNCH_ARGS+=(--checkpoint-s3-uri "$CHECKPOINT_S3_URI")
 [[ "$DRY_RUN" == "true" ]] && LAUNCH_ARGS+=(--dry-run)

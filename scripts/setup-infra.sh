@@ -208,7 +208,9 @@ else
     changed "附加托管策略 $SSM_MANAGED_POLICY_ARN"
 fi
 
-# 内联策略：S3 只限本桶、CloudWatch 指标、按 Project 标签限定的自我终止
+# 内联策略：S3 限定到 tpot-bench-results-<account>-* 前缀（支持多 Region 桶）、
+# CloudWatch 指标、按 Project 标签限定的自我终止
+BUCKET_PREFIX_ARN="arn:aws:s3:::tpot-bench-results-${ACCOUNT_ID}-*"
 cat >"$TMPDIR_SI/inline.json" <<EOF
 {
   "Version": "2012-10-17",
@@ -221,7 +223,7 @@ cat >"$TMPDIR_SI/inline.json" <<EOF
         "s3:GetObject",
         "s3:AbortMultipartUpload"
       ],
-      "Resource": "${BUCKET_ARN}/*"
+      "Resource": "arn:aws:s3:::tpot-bench-results-${ACCOUNT_ID}-*/*"
     },
     {
       "Sid": "ScopedResultsBucketList",
@@ -229,7 +231,7 @@ cat >"$TMPDIR_SI/inline.json" <<EOF
       "Action": [
         "s3:ListBucket"
       ],
-      "Resource": "${BUCKET_ARN}"
+      "Resource": "arn:aws:s3:::tpot-bench-results-${ACCOUNT_ID}-*"
     },
     {
       "Sid": "PublishGpuAndProgressMetrics",
@@ -275,7 +277,7 @@ PYEOF
 else
     aws iam put-role-policy --role-name "$ROLE_NAME" --policy-name "$INLINE_POLICY_NAME" \
         --policy-document "file://$TMPDIR_SI/inline.json"
-    created "内联策略 $INLINE_POLICY_NAME（作用域限定到 $BUCKET_ARN）"
+    created "内联策略 $INLINE_POLICY_NAME（作用域限定到 tpot-bench-results-${ACCOUNT_ID}-*）"
 fi
 
 # =============================================================================
@@ -347,7 +349,7 @@ echo " S3 桶 ARN           : $BUCKET_ARN"
 echo " IAM 角色            : $ROLE_NAME"
 echo " IAM 角色 ARN        : $ROLE_ARN"
 echo " 托管策略            : $SSM_MANAGED_POLICY_ARN"
-echo " 内联策略            : $INLINE_POLICY_NAME (作用域: $BUCKET_ARN)"
+echo " 内联策略            : $INLINE_POLICY_NAME (作用域: tpot-bench-results-${ACCOUNT_ID}-*)"
 echo " 实例配置文件        : $PROFILE_NAME"
 echo " 实例配置文件 ARN    : $PROFILE_ARN"
 echo "------------------------------------------------------------------------------"
