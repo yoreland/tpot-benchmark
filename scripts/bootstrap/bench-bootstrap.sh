@@ -912,6 +912,8 @@ fetch_checkpoint() {
         huggingface-cli download "$MODEL_NAME" --local-dir "$dest" --resume-download
     else
         log "回退到 huggingface_hub.snapshot_download"
+        # DLAMI 的系统 Python 可能没装 huggingface_hub，先确保安装
+        python3 -c "import huggingface_hub" 2>/dev/null || pip3 install -q huggingface_hub
         python3 - "$MODEL_NAME" "$dest" <<'PYEOF'
 import sys
 from huggingface_hub import snapshot_download
