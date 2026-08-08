@@ -487,21 +487,43 @@ setup_storage() {
 
     mkdir -p "$NVME_MOUNT"
     if [[ -n "$NVME_TARGET" ]]; then
-        # Deep Learning AMI / udev / systemd 可能持有 instance store 设备：
-        #   1) 已被 mount（findmnt 能看到）
-        #   2) 被 blkid/wipefs/mdadm probe 独占（findmnt 看不到，但 fuser 能看到）
-        #   3) 有残留 partition table 或 md superblock
-        # 全部处理，顺序：umount -> fuser -mk -> wipefs -> udevadm settle -> mkfs
+        # Deep Learning AMI / udev / systemd / LVM 可能持有 instance store 设备。
+        # 正确拆除顺序：systemd unit -> umount -> LVM remove -> dmsetup -> wipefs -> mkfs
+        #
+        # DLAMI 的典型堆栈：
+        #   opt-dlami-nvme.mount -> /dev/vg.01/lv_ephemeral (LVM) -> /dev/nvme1n1 (PV)
+        # 必须从顶往下拆。
 
-        # 先卸载 NVME_TARGET 本身
+        # 1) 停止 systemd mount unit（它是整个依赖链的顶端）
+        if command -v systemctl >/dev/null 2>&1; then
+            local unit
+            # 搜索：按设备名或已知 mount point
+            for pattern in "$NVME_TARGET" "/opt/dlami/nvme" "/mnt"; do
+                unit="$(systemctl list-units --type=mount --no-legend 2>/dev/null \
+                       | awk -v p="$pattern" '$0 ~ p {print $1}' | head -1)"
+                [[ -n "$unit" ]] && break
+            done
+            if [[ -n "$unit" ]]; then
+                log "发现 systemd mount unit: $unit，stop + disable 它"
+                systemctl stop "$unit" 2>/dev/null || true
+                systemctl disable "$unit" 2>/dev/null || true
+                sleep 1
+            fi
+            # 也 stop 可能存在的 lvm2-activation 相关 units
+            systemctl stop lvm2-lvmpolld.socket 2>/dev/null || true
+            systemctl stop lvm2-monitor.service 2>/dev/null || true
+        fi
+
+        # 2) umount 所有残留
         local existing_mount
         existing_mount="$(findmnt -n -o TARGET "$NVME_TARGET" 2>/dev/null || true)"
         if [[ -n "$existing_mount" ]]; then
             log "检测到 $NVME_TARGET 已挂载于 $existing_mount，先 umount"
             run_destructive umount "$NVME_TARGET" || run_destructive umount -l "$NVME_TARGET" || true
         fi
-
-        # RAID 成员也可能被 auto-mount（多盘场景）
+        # 也 umount LVM 路径
+        umount /opt/dlami/nvme 2>/dev/null || true
+        umount /dev/vg.01/lv_ephemeral 2>/dev/null || true
         for dev in "${NVME_DEVICES[@]}"; do
             local m
             m="$(findmnt -n -o TARGET "$dev" 2>/dev/null || true)"
@@ -529,6 +551,9 @@ setup_storage() {
                 while IFS= read -r lv; do
                     lv="$(echo "$lv" | xargs)"  # trim whitespace
                     [[ -z "$lv" ]] && continue
+                    # 先 deactivate，再 remove
+                    log "  lvchange -an $lv"
+                    lvchange -an "$lv" 2>/dev/null || true
                     log "  lvremove -f $lv"
                     lvremove -f "$lv" 2>/dev/null || true
                 done <<<"$lv_list"
@@ -538,6 +563,8 @@ setup_storage() {
                 while IFS= read -r vg; do
                     vg="$(echo "$vg" | xargs)"
                     [[ -z "$vg" ]] && continue
+                    log "  vgchange -an $vg"
+                    vgchange -an "$vg" 2>/dev/null || true
                     log "  vgremove -f $vg"
                     vgremove -f "$vg" 2>/dev/null || true
                 done <<<"$vg_list"
@@ -546,6 +573,20 @@ setup_storage() {
             for dev in "${NVME_DEVICES[@]}"; do
                 pvremove -f "$dev" 2>/dev/null || true
             done
+        fi
+
+        # 如果 LVM remove 失败，直接用 dmsetup 强制移除所有 device-mapper 映射
+        if command -v dmsetup >/dev/null 2>&1; then
+            local dm_devs
+            dm_devs="$(dmsetup ls 2>/dev/null | awk '{print $1}' || true)"
+            if [[ -n "$dm_devs" && "$dm_devs" != "No devices found" ]]; then
+                log "dmsetup 强制移除残留 device-mapper 设备:"
+                while IFS= read -r dm; do
+                    [[ -z "$dm" ]] && continue
+                    log "  dmsetup remove -f $dm"
+                    dmsetup remove -f "$dm" 2>/dev/null || true
+                done <<<"$dm_devs"
+            fi
         fi
 
         # 清残留签名，防止 mdadm auto-assemble 或 LVM 扫描再次抢占
@@ -559,32 +600,6 @@ setup_storage() {
 
         # 等 udev 事件队列清空
         udevadm settle --timeout=5 2>/dev/null || true
-
-        # systemd 可能通过 .mount unit 持有该设备。找到并 stop 它
-        if command -v systemctl >/dev/null 2>&1; then
-            local unit
-            unit="$(systemctl list-units --type=mount --no-legend 2>/dev/null \
-                   | awk -v dev="$NVME_TARGET" '$0 ~ dev {print $1}' | head -1)"
-            if [[ -z "$unit" ]]; then
-                # 按 mount point 搜索：DLAMI 通常挂到 /mnt 或 /opt/dlami/nvme
-                for mp in /mnt /opt/dlami/nvme; do
-                    unit="$(systemctl list-units --type=mount --no-legend 2>/dev/null \
-                           | awk -v mp="$mp" '$0 ~ mp {print $1}' | head -1)"
-                    [[ -n "$unit" ]] && break
-                done
-            fi
-            if [[ -n "$unit" ]]; then
-                log "发现 systemd mount unit: $unit，stop 它"
-                systemctl stop "$unit" 2>/dev/null || true
-                sleep 1
-            fi
-        fi
-
-        # 再次尝试 umount（systemctl stop 后可能需要显式 umount）
-        umount "$NVME_TARGET" 2>/dev/null || umount -l "$NVME_TARGET" 2>/dev/null || true
-        for dev in "${NVME_DEVICES[@]}"; do
-            umount "$dev" 2>/dev/null || umount -l "$dev" 2>/dev/null || true
-        done
 
         # 最终重试循环：等待内核释放设备（最多 15s）
         local attempts=0
