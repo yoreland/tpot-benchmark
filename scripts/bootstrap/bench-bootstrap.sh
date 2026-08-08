@@ -480,9 +480,7 @@ setup_storage() {
         log "只有 1 块本地盘，直接使用 $NVME_TARGET（不做 RAID0）"
     else
         NVME_TARGET="$RAID_DEVICE"
-        log "发现 ${#NVME_DEVICES[@]} 块本地盘，组建 RAID0 -> $RAID_DEVICE"
-        run_destructive mdadm --create "$RAID_DEVICE" --level=0 \
-            --raid-devices="${#NVME_DEVICES[@]}" --force --run "${NVME_DEVICES[@]}"
+        log "发现 ${#NVME_DEVICES[@]} 块本地盘，目标 RAID0 -> $RAID_DEVICE（先清理再组建）"
     fi
 
     mkdir -p "$NVME_MOUNT"
@@ -600,6 +598,13 @@ setup_storage() {
 
         # 等 udev 事件队列清空
         udevadm settle --timeout=5 2>/dev/null || true
+
+        # 多盘场景：清理完毕后才组建 RAID0
+        if [[ "${#NVME_DEVICES[@]}" -gt 1 && "$NVME_TARGET" == "$RAID_DEVICE" ]]; then
+            log "组建 RAID0: ${NVME_DEVICES[*]} -> $RAID_DEVICE"
+            run_destructive mdadm --create "$RAID_DEVICE" --level=0 \
+                --raid-devices="${#NVME_DEVICES[@]}" --force --run "${NVME_DEVICES[@]}"
+        fi
 
         # 最终重试循环：等待内核释放设备（最多 15s）
         local attempts=0
