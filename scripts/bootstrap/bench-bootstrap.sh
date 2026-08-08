@@ -519,6 +519,35 @@ setup_storage() {
             done
         fi
 
+        # LVM：DLAMI 在 instance store 上创建了 VG/LV（vg.01/lv_ephemeral）
+        # 必须先移除 LV/VG/PV，否则 device-mapper 锁住设备，mkfs 会 "Device busy"
+        if command -v lvs >/dev/null 2>&1; then
+            local lv_list vg_list
+            lv_list="$(lvs --noheadings -o lv_path 2>/dev/null || true)"
+            if [[ -n "$lv_list" ]]; then
+                log "发现 LVM logical volume(s)，移除:"
+                while IFS= read -r lv; do
+                    lv="$(echo "$lv" | xargs)"  # trim whitespace
+                    [[ -z "$lv" ]] && continue
+                    log "  lvremove -f $lv"
+                    lvremove -f "$lv" 2>/dev/null || true
+                done <<<"$lv_list"
+            fi
+            vg_list="$(vgs --noheadings -o vg_name 2>/dev/null || true)"
+            if [[ -n "$vg_list" ]]; then
+                while IFS= read -r vg; do
+                    vg="$(echo "$vg" | xargs)"
+                    [[ -z "$vg" ]] && continue
+                    log "  vgremove -f $vg"
+                    vgremove -f "$vg" 2>/dev/null || true
+                done <<<"$vg_list"
+            fi
+            # pvremove on instance store devices
+            for dev in "${NVME_DEVICES[@]}"; do
+                pvremove -f "$dev" 2>/dev/null || true
+            done
+        fi
+
         # 清残留签名，防止 mdadm auto-assemble 或 LVM 扫描再次抢占
         if command -v wipefs >/dev/null 2>&1; then
             log "wipefs -a $NVME_TARGET"
