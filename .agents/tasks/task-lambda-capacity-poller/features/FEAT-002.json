@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-002",
+  "type": "chore",
+  "description": "Deploy the Lambda capacity poller to AWS, verify it is scheduled and working, then commit and push all code",
+  "status": "in_progress",
+  "steps": [
+    "Run 'bash infra/deploy-poller.sh' from the repo root /projects/sandbox/tpot-benchmark to create all AWS resources (SNS topic, IAM role, Lambda function, EventBridge rule).",
+    "Verify Lambda exists: aws lambda get-function --function-name tpot-bench-capacity-poller --region us-east-1",
+    "Verify EventBridge rule exists and is ENABLED: aws events describe-rule --name tpot-bench-poll-capacity --region us-east-1",
+    "Do a test invocation: aws lambda invoke --function-name tpot-bench-capacity-poller --region us-east-1 --payload '{}' /tmp/lambda-out.json && cat /tmp/lambda-out.json",
+    "Check Lambda logs for the test invocation to confirm it ran without errors (or only got InsufficientCapacity which is expected): aws logs tail /aws/lambda/tpot-bench-capacity-poller --region us-east-1 --since 5m",
+    "Git add infra/ directory, commit with message 'feat: Lambda + EventBridge capacity poller for B300/H200 spot', and push to origin harden-ec2-bench-runner"
+  ],
+  "acceptance_criteria": [
+    "Lambda function tpot-bench-capacity-poller exists in us-east-1",
+    "EventBridge rule tpot-bench-poll-capacity exists and is ENABLED with rate(3 minutes)",
+    "Test invocation completes without Lambda runtime errors (InsufficientCapacity from EC2 is expected and acceptable)",
+    "All code committed and pushed to harden-ec2-bench-runner branch"
+  ],
+  "verification": [
+    "aws lambda get-function --function-name tpot-bench-capacity-poller --region us-east-1 returns successfully",
+    "aws events describe-rule --name tpot-bench-poll-capacity --region us-east-1 shows State=ENABLED",
+    "aws lambda invoke succeeds (status 200) and output shows no unhandled exceptions",
+    "git status shows clean working tree after push"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

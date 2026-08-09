@@ -193,7 +193,7 @@ if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" >
     aws lambda update-function-configuration \
         --region "$REGION" \
         --function-name "$FUNCTION_NAME" \
-        --timeout 60 \
+        --timeout 120 \
         --memory-size 256 \
         --environment "Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN,EVENTBRIDGE_RULE_NAME=$RULE_NAME}" \
         --query 'FunctionArn' --output text >/dev/null
@@ -208,7 +208,7 @@ else
         --runtime "python3.12" \
         --role "$ROLE_ARN" \
         --handler "handler.lambda_handler" \
-        --timeout 60 \
+        --timeout 120 \
         --memory-size 256 \
         --zip-file "fileb://$ZIP_FILE" \
         --environment "Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN,EVENTBRIDGE_RULE_NAME=$RULE_NAME}" \
