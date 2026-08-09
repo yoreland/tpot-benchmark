@@ -27,7 +27,17 @@ case "$ARGS" in
         printf '%s' "${STUB_INSTANCE_TYPE:-p5en.48xlarge}"
         exit 0
         ;;
-    *localhost*health*)
+    *localhost*health*|*127.0.0.1*health*)
+        # 带 -w '%{http_code}' 调用时要像真 curl 那样只吐状态码：连不上时真 curl
+        # 吐 000 且以非零退出，b300-run-config.sh 的就绪判定就是照这个来的。
+        if [[ "$ARGS" == *http_code* ]]; then
+            if [[ "${STUB_HEALTH_OK:-1}" == "1" ]]; then
+                printf '%s' "${STUB_HEALTH_CODE:-200}"
+                exit 0
+            fi
+            printf '%s' "${STUB_HEALTH_CODE:-000}"
+            exit 7
+        fi
         if [[ "${STUB_HEALTH_OK:-1}" == "1" ]]; then
             printf '%s' '{"status":"ok"}'
             exit 0

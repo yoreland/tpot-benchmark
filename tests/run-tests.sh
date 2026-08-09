@@ -1025,6 +1025,138 @@ assert_contains_token "$(ledger_field "$BROKEN_LEDGER" "$FIXTURE_RUN_ID" summary
 end_case
 
 # =============================================================================
+# scripts/b300-run-config.sh 的用例
+# 这个脚本所有动作都发生在一台只能用 SSM 摸到的 B300 上，所以它的 --dry-run 走的是
+# 「不发 SSM，把那段机上 shell 文本直接在 stub PATH 上跑一遍」。于是下面断言的是
+# 脚本**真的算出来的** docker run / docker exec / aws s3 cp 命令行，而不是静态字符串。
+# =============================================================================
+B300_RUNNER="$REPO_ROOT/scripts/b300-run-config.sh"
+log "被测: $B300_RUNNER"
+
+run_b300() {
+    # run_b300 <bin> [额外 env...] -- <脚本参数...>
+    local bin="$1"; shift
+    local envs=()
+    while [[ $# -gt 0 && "$1" != "--" ]]; do
+        envs+=("$1")
+        shift
+    done
+    [[ "${1:-}" == "--" ]] && shift
+    timeout "$CASE_TIMEOUT" env \
+        PATH="$bin:$PATH" \
+        STUB_LOG="$STUB_LOG" \
+        DRY_RUN=1 \
+        DRY_RUN_LOG="$STUB_LOG" \
+        BENCH_ROOT="$CASE_DIR/bench" \
+        JIT_CACHE_DIR="$CASE_DIR/jitcache" \
+        OUT_DIR="$CASE_DIR/out" \
+        POLL_INTERVAL_SEC=1 \
+        B300_INSTANCE_ID=i-0stub00000000000 \
+        REGION=us-west-2 \
+        "${envs[@]}" \
+        bash "$B300_RUNNER" "$@" >"$CASE_DIR/stdout.log" 2>&1
+    LAST_EXIT=$?
+    if [[ "$LAST_EXIT" == "124" ]]; then
+        echo "   [注意] 用例被 timeout ${CASE_TIMEOUT}s 强杀"
+    fi
+}
+
+# =============================================================================
+# 用例 23) c1 配置必须逐字算出那条 docker run，并且把两条 bench 的结果归一化进
+# matrix-status.json。配置名写错一个字母就等于起了另一台价值 $50/hr 的实验，
+# 所以这条断言的是参数本身。
+# =============================================================================
+begin_case 23 "b300-run-config c1 算出正确的 docker run 并写出 matrix-status"
+BIN="$(make_case_bin)"
+run_b300 "$BIN" -- --config c1-tp8-eagle-megamoe --dry-run --timeout-sec 5
+assert_exit 0 "$LAST_EXIT" "c1 全流程跑通"
+DOCKER_RUN_LINE="$(grep_line "$STUB_LOG" "docker run -d --name sglang-server")"
+assert_contains_token "$DOCKER_RUN_LINE" "--tp 8" "docker run 里是整机 tp=8"
+assert_contains_token "$DOCKER_RUN_LINE" "--moe-a2a-backend megamoe" \
+    "MoE 走 megamoe（B300 上唯一验证过的路径，不是 H200 的 marlin）"
+assert_contains_token "$DOCKER_RUN_LINE" "--speculative-algorithm EAGLE" "EAGLE 开着"
+assert_contains_token "$DOCKER_RUN_LINE" "--speculative-num-steps 3" "EAGLE steps=3"
+assert_contains_token "$DOCKER_RUN_LINE" "--speculative-eagle-topk 1" "EAGLE topk=1"
+assert_contains_token "$DOCKER_RUN_LINE" "--speculative-num-draft-tokens 4" "EAGLE draft tokens=4"
+assert_contains_token "$DOCKER_RUN_LINE" "SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=8320" \
+    "megamoe 的 per-rank token 上限环境变量被带上"
+assert_contains_token "$DOCKER_RUN_LINE" "$CASE_DIR/jitcache:/root/.cache" \
+    "JIT 缓存目录被 bind mount 进容器（省掉 10-20 分钟 DeepGEMM 预编译）"
+assert_contains_token "$DOCKER_RUN_LINE" "lmsysorg/sglang:v0.5.12.post1-cu130" \
+    "镜像 tag 由配置决定（换镜像是绕长上下文内核崩溃的候选手段之一）"
+assert_file_contains "$STUB_LOG" "--random-input 40000 --random-output 1500" \
+    "自定义负载那条 bench 参数与 README 6.1 一致"
+assert_file_contains "$STUB_LOG" "--random-input 30000 --random-output 4096" \
+    "官方对标那条 bench 参数与 README 6.1 一致"
+assert_file_contains "$STUB_LOG" "--num-prompts 50 --max-concurrency 1" "50 条请求、并发 1"
+assert_file_exists "$CASE_DIR/out/matrix-status.json" "matrix-status.json 落盘"
+assert_file_contains "$CASE_DIR/out/matrix-status.json" '"status": "completed"' "c1 记成 completed"
+assert_file_contains "$CASE_DIR/out/matrix-status.json" '"median_tpot_ms": 3.76' \
+    "归一化后的 P50 TPOT 进了状态文件（bench_serving 的键名是 median_*，不是 tpot_p50_*）"
+assert_file_contains "$CASE_DIR/out/matrix-status.json" '"p6-b300.48xlarge"' "机型记在状态文件里"
+end_case
+
+# =============================================================================
+# 用例 24) --skip-launch 的全部意义就是「别动那个已经在跑的服务」。
+# 一次多余的 docker rm 等于把 9.5 分钟冷启动和 1.6 GB JIT 缓存一起扔掉。
+# =============================================================================
+begin_case 24 "--skip-launch 绝不 docker rm / docker run，只跑 bench"
+BIN="$(make_case_bin)"
+run_b300 "$BIN" -- --config c1-tp8-eagle-megamoe --skip-launch --dry-run --timeout-sec 5
+assert_exit 0 "$LAST_EXIT" "--skip-launch 也能跑完 bench"
+assert_count "$STUB_LOG" "docker rm" 0 "一次 docker rm 都没有"
+assert_count "$STUB_LOG" "docker run" 0 "一次 docker run 都没有"
+assert_file_contains "$STUB_LOG" "bench_serving" "还是跑了 bench"
+assert_file_contains "$CASE_DIR/stdout.log" "不 docker rm、不 docker run" "日志里说清楚了它跳过了启动"
+end_case
+
+# =============================================================================
+# 用例 25) 配置名打错必须在**任何** SSM 调用之前就挡住：那台机器 $50/hr，
+# 误起一个容器就是十几分钟白烧。
+# =============================================================================
+begin_case 25 "未知配置名以用法错误退出，且没有发起任何 SSM 调用"
+BIN="$(make_case_bin)"
+run_b300 "$BIN" -- --config c9-does-not-exist --dry-run
+assert_exit 2 "$LAST_EXIT" "未知配置名以退出码 2（用法错误）退出"
+assert_count "$STUB_LOG" "ssm send-command" 0 "没有发起任何 SSM 调用"
+assert_count "$STUB_LOG" "docker run" 0 "没有起任何容器"
+assert_file_contains "$CASE_DIR/stdout.log" "未知配置名" "报错说清楚是配置名的问题"
+assert_file_contains "$CASE_DIR/stdout.log" "c1-tp8-eagle-megamoe" "顺手列出了已登记的配置"
+end_case
+
+# =============================================================================
+# 用例 26) 服务起不来时：必须在超时后以专用退出码退出，并且**无论如何**把
+# server.log 传上 S3 —— 机器一被回收，那份日志就是唯一的证据。
+# =============================================================================
+begin_case 26 "health 一直不是 200 时超时退出，且仍然把 server.log 传上 S3"
+BIN="$(make_case_bin)"
+run_b300 "$BIN" STUB_HEALTH_OK=0 -- --config c1-tp8-eagle-megamoe --dry-run --timeout-sec 2
+assert_exit 3 "$LAST_EXIT" "等就绪超时以退出码 3 退出"
+assert_file_contains "$STUB_LOG" "aws s3 cp" "失败路径上仍然发生了 s3 cp"
+assert_min_count "$STUB_LOG" "server.log" 1 "上传的对象里包含 server.log"
+assert_file_contains "$CASE_DIR/out/matrix-status.json" '"status": "failed"' "状态文件记成 failed"
+assert_file_contains "$CASE_DIR/out/matrix-status.json" "等就绪超时" "failure_reason 写明了超时"
+assert_count "$STUB_LOG" "bench_serving" 0 "没就绪就绝不开始跑 bench"
+end_case
+
+# =============================================================================
+# 用例 27) Spot 中断通知：这是一次性 Spot（interruption behavior = terminate），
+# 收到通知只剩两分钟。必须先同步产物再退出，而且退出码要和「配置跑挂了」区分开，
+# 否则调用方会把「被 AWS 抢走」误判成「这个配置不行」。
+# =============================================================================
+begin_case 27 "收到 Spot 中断通知时先同步产物再以专用退出码 9 退出"
+BIN="$(make_case_bin)"
+run_b300 "$BIN" STUB_SPOT_ACTION='{"action":"terminate","time":"2026-08-09T15:30:00Z"}' \
+    -- --config c1-tp8-eagle-megamoe --dry-run --timeout-sec 5
+assert_exit 9 "$LAST_EXIT" "Spot 中断走专用退出码 9，不和配置失败混在一起"
+assert_file_contains "$STUB_LOG" "meta-data/spot/instance-action" "轮询里真的查了 IMDS 的中断通知"
+assert_file_contains "$STUB_LOG" "aws s3 cp" "退出之前把产物同步走了"
+assert_file_contains "$CASE_DIR/out/matrix-status.json" "spot interruption" \
+    "状态文件写明是被抢占，不是配置的问题"
+assert_count "$STUB_LOG" "bench_serving" 0 "收到通知后不再开新的 bench"
+end_case
+
+# =============================================================================
 # 汇总
 # =============================================================================
 echo ""

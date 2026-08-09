@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Run the two P1 variable-isolation configs on the same live B300 box using scripts/b300-run-config.sh from FEAT-001: c2-tp8-nospec (tp=8, EAGLE disabled) to quantify what speculative decoding actually buys, and c3-tp4-eagle-megamoe (tp=4 + EAGLE + megamoe) to isolate the tp variable against the H200 tp=4 baseline. These two are independent of each other and of the P2 configs in FEAT-003, so their order can be swapped if one fails. Each config must be fully captured to S3 before the next container replaces it.",
+  "status": "pending",
+  "steps": [
+    "Before touching the running container, confirm FEAT-001 finished uploading c1 artifacts to S3 and that /opt/dlami/nvme/jitcache exists (docker cp of the c1 cache). Losing the JIT cache costs 10-20 min of GPU time per later config.",
+    "Add config c2-tp8-nospec to the case statement in scripts/b300-run-config.sh: identical to c1-tp8-eagle-megamoe except the four speculative flags (--speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4) are removed. Keep --tp 8, --moe-a2a-backend megamoe, --mem-fraction-static 0.85, --cuda-graph-max-bs 64, --trust-remote-code, --enable-metrics, --host 0.0.0.0 --port 30000, image lmsysorg/sglang:v0.5.12.post1-cu130, env SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=8320, and add -v /opt/dlami/nvme/jitcache:/root/.cache. Deliberately do NOT add --skip-server-warmup even though the awslabs sample has it: c1 ran without it and every config in this matrix must stay apples-to-apples.",
+    "Add config c3-tp4-eagle-megamoe: identical to c1 but --tp 4. Note in the recipe comments and later in the report that tp=4 leaves 4 of the 8 GPUs idle, so it violates README 12.9 criterion A6 (whole-machine 8-GPU deployment) and is therefore a variable-isolation datapoint for comparison against the H200 tp=4 result, not an acceptance candidate.",
+    "Run c2 end to end: scripts/b300-run-config.sh --config c2-tp8-nospec --instance-id i-0d2500b8c91851a30 --region us-west-2. Record time-to-healthy so the JIT-cache saving versus c1 is measurable. Note that with EAGLE disabled accept_length will be absent or 1.0 - record that as-is, do not treat a missing accept_length as a failure for this config.",
+    "Run c3 end to end: scripts/b300-run-config.sh --config c3-tp4-eagle-megamoe --instance-id i-0d2500b8c91851a30 --region us-west-2.",
+    "After each config, update results/b300-matrix-20260809/matrix-status.json and pull artifacts into results/b300-matrix-20260809/<config>/. If a config fails to become healthy, capture docker logs to <config>/server.log, upload it, set that config's status to failed with the concrete error line as failure_reason, and move on to the next config rather than retrying blindly - GPU time is $50/hr.",
+    "If a config dies with an assertion, record the exact assertion text in matrix-status.json failure_reason. Do NOT retry any dp-attention shape in a single unified process: --enable-dp-attention with --dp N is already known to die with 'AssertionError: short-circuiting allreduce will lead to hangs', and tp_size % dp_size == 0 is already known to be asserted.",
+    "Commit to harden-ec2-bench-runner after each config's artifacts land, so a spot interruption cannot lose completed work. Do not push."
+  ],
+  "acceptance_criteria": [
+    "scripts/b300-run-config.sh recognizes c2-tp8-nospec and c3-tp4-eagle-megamoe and passes bash -n",
+    "For each of c2 and c3, either real bench_custom/bench_official JSON exists in both S3 (runs/b300-matrix-20260809/<config>/) and results/b300-matrix-20260809/<config>/, or matrix-status.json marks it failed with a concrete failure_reason quoted from the server log",
+    "matrix-status.json shows time_to_healthy_sec for c2 and c3 so the JIT-cache reuse effect is quantified",
+    "tests/run-tests.sh still passes with at least 22 cases and at least 220 assertions",
+    "Each completed config is committed to harden-ec2-bench-runner before the next container is launched"
+  ],
+  "verification": [
+    "bash -n scripts/b300-run-config.sh",
+    "tests/run-tests.sh",
+    "aws s3 ls s3://tpot-bench-results-077090643075-us-west-2/runs/b300-matrix-20260809/ --recursive --region us-west-2 lists c2 and c3 artifacts",
+    "python3 -c 'import json;d=json.load(open(\"results/b300-matrix-20260809/matrix-status.json\"));[print(c[\"name\"],c[\"status\"]) for c in d[\"configs\"]]' shows a terminal status for c2 and c3"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

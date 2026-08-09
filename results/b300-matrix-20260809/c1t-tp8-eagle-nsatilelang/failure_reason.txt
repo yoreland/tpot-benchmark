@@ -1,0 +1,1 @@
+bench 非零退出（custom rc=1, official rc=137），详见 bench_*.log 与 server.log

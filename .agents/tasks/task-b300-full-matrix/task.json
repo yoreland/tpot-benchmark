@@ -1,0 +1,12 @@
+{
+  "task_id": "task-b300-full-matrix",
+  "task_description": "Fully exploit the scarce live B300 spot instance i-0d2500b8c91851a30 (p6-b300.48xlarge, us-west-2b, ~$50/hr, SSM-only access) before it is reclaimed: build an SSM-driven per-config runner, benchmark the B300 test matrix from README sections 6/6.1/12.7 (tp=8+EAGLE+megamoe, tp=8 no-EAGLE, tp=4+EAGLE, tp=8+triton MoE, four independent tp=2 engines + router) with the two README 6.1 benchmark commands, preserve every result to S3 and the repo as it is produced, and deliver a reports/b300-matrix-20260809/ report matching the H200 report shape plus corrected B300 recipes. Partial completion must be surfaced precisely, per config.",
+  "status": "in_progress",
+  "feature_order": [
+    "FEAT-001",
+    "FEAT-002",
+    "FEAT-003",
+    "FEAT-004"
+  ],
+  "blocked_reason": null
+}

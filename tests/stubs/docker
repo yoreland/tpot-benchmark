@@ -20,6 +20,16 @@ case "${1:-}" in
         exit 0
         ;;
     logs)
+        echo "${STUB_DOCKER_LOGS:-stub sglang-server log}"
+        exit 0
+        ;;
+    inspect)
+        # b300-run-config.sh 的就绪判定要读 State.Running；容器退出这条路必须能被
+        # 测出来，所以状态由 STUB_DOCKER_RUNNING 控制。
+        echo "${STUB_DOCKER_RUNNING:-true}"
+        exit 0
+        ;;
+    cp)
         exit 0
         ;;
     rm)

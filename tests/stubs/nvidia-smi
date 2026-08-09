@@ -4,6 +4,19 @@ set -uo pipefail
 printf 'nvidia-smi %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
 
 count="${STUB_GPU_COUNT:-8}"
+
+# b300-run-config.sh 的就绪判定只问一列 memory.used，用它来分辨「服务真的把权重
+# 装进显存了」还是「HTTP 壳子活着但 8 张卡全是 0 MiB」。STUB_GPU_MEM_USED=0 就是
+# 后者那种空壳。
+if [[ "$*" == *--query-gpu=memory.used* && "$*" != *utilization* ]]; then
+    i=0
+    while [[ "$i" -lt "$count" ]]; do
+        echo "${STUB_GPU_MEM_USED:-230000}"
+        i=$((i + 1))
+    done
+    exit 0
+fi
+
 i=0
 while [[ "$i" -lt "$count" ]]; do
     echo "$i, 87, 62, 138000, 144384, 61"
