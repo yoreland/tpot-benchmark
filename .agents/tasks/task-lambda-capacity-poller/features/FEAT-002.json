@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "chore",
   "description": "Deploy the Lambda capacity poller to AWS, verify it is scheduled and working, then commit and push all code",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Run 'bash infra/deploy-poller.sh' from the repo root /projects/sandbox/tpot-benchmark to create all AWS resources (SNS topic, IAM role, Lambda function, EventBridge rule).",
     "Verify Lambda exists: aws lambda get-function --function-name tpot-bench-capacity-poller --region us-east-1",
@@ -24,5 +24,5 @@
     "git status shows clean working tree after push"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "Deployment successful. Lambda found H200 capacity in us-east-2a and launched 3 benchmark p5en.48xlarge instances (i-04210a40bf95d360c @ 18.224.58.212, i-0f7a557cef7944c75 @ 3.14.245.133, i-0e3e92b1459168f17 @ 3.128.206.200). EventBridge rule self-disabled after launch. Increased Lambda timeout from 60s to 120s to prevent timeouts during cross-region probing. B300 (p6-b300.48xlarge) had InsufficientInstanceCapacity across all regions (expected). Instances left running per user request for SSH access."
 }
