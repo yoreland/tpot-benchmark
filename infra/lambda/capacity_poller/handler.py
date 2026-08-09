@@ -513,11 +513,22 @@ def lambda_handler(event, context):
     # Track launched types in this invocation
     launched_types = {}
 
+    # Support SKIP_INSTANCE_TYPES env var (comma-separated) to skip types already benchmarked
+    skip_types = set(
+        t.strip() for t in os.environ.get("SKIP_INSTANCE_TYPES", "").split(",") if t.strip()
+    )
+    if skip_types:
+        logger.info("Skipping instance types (already benchmarked): %s", skip_types)
+
     for target in TARGETS:
         instance_type = target["instance_type"]
         region = target["region"]
         max_price = target["max_price"]
         recipe_file = target["recipe_file"]
+
+        # Skip types the user marked as done
+        if instance_type in skip_types:
+            continue
 
         # Skip if already launched this type in this invocation
         if instance_type in launched_types:
