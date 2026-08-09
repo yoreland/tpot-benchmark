@@ -126,7 +126,7 @@ POLICY_DOC='{
       "Sid": "IAMPassRole",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::'"$ACCOUNT_ID"':role/*"
+      "Resource": "arn:aws:iam::'"$ACCOUNT_ID"':role/tpot-bench-ec2-role"
     },
     {
       "Sid": "CloudWatchLogs",

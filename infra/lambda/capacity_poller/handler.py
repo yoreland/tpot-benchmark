@@ -132,30 +132,20 @@ def _get_ami(ssm_client, region: str) -> str:
 
 
 def _get_security_group(ec2_client, region: str) -> str:
-    """Look up security group by name; fallback to default SG."""
+    """Look up security group by name. Returns empty string if not found (fail-closed)."""
     try:
         resp = ec2_client.describe_security_groups(
             Filters=[{"Name": "group-name", "Values": [SG_NAME]}]
         )
         if resp["SecurityGroups"]:
             return resp["SecurityGroups"][0]["GroupId"]
-    except ClientError:
-        pass
+    except ClientError as e:
+        logger.error("Error looking up SG %s in %s: %s", SG_NAME, region, e)
 
-    # Fallback: default security group
-    try:
-        resp = ec2_client.describe_security_groups(
-            Filters=[{"Name": "group-name", "Values": ["default"]}]
-        )
-        if resp["SecurityGroups"]:
-            sg_id = resp["SecurityGroups"][0]["GroupId"]
-            logger.warning(
-                "Using default SG %s in %s (no %s found)", sg_id, region, SG_NAME
-            )
-            return sg_id
-    except ClientError:
-        pass
-
+    logger.warning(
+        "Security group %s not found in %s, skipping region (fail-closed)",
+        SG_NAME, region,
+    )
     return ""
 
 
@@ -229,7 +219,16 @@ def _render_env_prelude(
 
 
 def _render_full_bootstrap(env_prelude: str, bootstrap_content: str) -> str:
-    """Combine env prelude with the bench-bootstrap.sh script."""
+    """Combine env prelude with the bench-bootstrap.sh script.
+
+    Strips the leading shebang from bootstrap_content to avoid a double
+    shebang in the concatenated output.
+    """
+    # Remove leading shebang line from bootstrap if present
+    if bootstrap_content.startswith("#!"):
+        # Skip the first line (shebang)
+        bootstrap_content = bootstrap_content.split("\n", 1)[1]
+
     return (
         env_prelude
         + "# --- bench-bootstrap.sh ---\n"
@@ -289,7 +288,6 @@ def _probe_capacity(
             MaxCount=1,
             SubnetId=subnet,
             SecurityGroupIds=[sg],
-            IamInstanceProfile={"Name": INSTANCE_PROFILE_NAME},
             InstanceInitiatedShutdownBehavior="terminate",
             InstanceMarketOptions={
                 "MarketType": "spot",
