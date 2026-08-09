@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# 假 nvme：只在 lsblk 无输出时才会被用到，这里只记录调用并返回空清单。
+set -uo pipefail
+printf 'nvme %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+printf '%b' "${STUB_NVME_LIST:-}"
+exit 0

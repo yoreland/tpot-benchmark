@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 假 shutdown：只记录调用。真实脚本只在 terminate-instances 失败时才回退到它。
+set -uo pipefail
+printf 'shutdown %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+exit 0

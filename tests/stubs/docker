@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# 假 docker：记录调用；bench_serving 的 docker exec 会真的写出一个结果 JSON，
+# 好让「结果文件被生成并被同步」这条链路真的被执行到。
+set -uo pipefail
+printf 'docker %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+
+ARGS="$*"
+
+case "${1:-}" in
+    info)
+        echo "${STUB_DOCKER_ROOT:-/var/lib/docker}"
+        exit 0
+        ;;
+    run)
+        echo "0stubcontainerid00000000"
+        exit 0
+        ;;
+    ps)
+        echo "${STUB_DOCKER_PS:-sglang-server}"
+        exit 0
+        ;;
+    logs)
+        exit 0
+        ;;
+    rm)
+        exit 0
+        ;;
+    exec)
+        case "$ARGS" in
+            *bench_serving*)
+                outfile=""
+                prev=""
+                for a in "$@"; do
+                    if [[ "$prev" == "--output-file" ]]; then
+                        outfile="$a"
+                    fi
+                    prev="$a"
+                done
+                if [[ -n "$outfile" ]]; then
+                    mkdir -p "$(dirname "$outfile")"
+                    cat >"$outfile" <<'EOF'
+{
+  "backend": "sglang",
+  "dataset_name": "random",
+  "tpot_p50_ms": 3.76,
+  "tpot_p95_ms": 4.10,
+  "ttft_p50_ms": 1420.0,
+  "ttft_p95_ms": 1610.0,
+  "e2e_latency_p50_ms": 7200.0,
+  "output_throughput_tok_per_s": 266.0
+}
+EOF
+                fi
+                exit "${STUB_BENCH_EXIT:-0}"
+                ;;
+        esac
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac

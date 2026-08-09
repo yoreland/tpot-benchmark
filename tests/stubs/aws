@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# 假 aws CLI：把每次调用记进 $STUB_LOG，并按参数返回脚本化输出。
+# 绝不接触真实 AWS。
+set -uo pipefail
+printf 'aws %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+
+ARGS="$*"
+
+case "$ARGS" in
+    *"s3 sync"*)
+        # 权重镜像同步刻意放慢，好让后台 streamer / spot 监听 / 看门狗有时间介入
+        case "$ARGS" in
+            *"/checkpoints/"*) sleep "${STUB_CHECKPOINT_SLEEP:-0}" ;;
+        esac
+        exit 0
+        ;;
+    *"s3 cp"*)
+        exit 0
+        ;;
+    *"s3 ls"*)
+        exit 0
+        ;;
+    *"cloudwatch put-metric-data"*)
+        exit 0
+        ;;
+    *"cloudwatch get-metric-statistics"*)
+        echo 3
+        exit 0
+        ;;
+    *"ec2 terminate-instances"*)
+        echo '{"TerminatingInstances":[{"InstanceId":"i-0stub00000000000","CurrentState":{"Name":"shutting-down"}}]}'
+        exit 0
+        ;;
+    *"ec2 run-instances"*)
+        case "$ARGS" in
+            *--dry-run*)
+                echo "An error occurred (DryRunOperation) when calling the RunInstances operation: Request would have succeeded, but DryRun flag is set." >&2
+                exit 255
+                ;;
+        esac
+        echo '{"Instances":[{"InstanceId":"i-0stub00000000000","InstanceType":"stub"}]}'
+        exit 0
+        ;;
+    *"sts get-caller-identity"*)
+        cat <<'EOF'
+{
+  "UserId": "AROASTUB:stub",
+  "Account": "077090643075",
+  "Arn": "arn:aws:sts::077090643075:assumed-role/kiro/stub"
+}
+EOF
+        exit 0
+        ;;
+    *"ssm get-parameter"*)
+        echo "ami-0stub00000000000"
+        exit 0
+        ;;
+    *"ec2 describe-images"*)
+        echo "ami-0stub00000000000"
+        exit 0
+        ;;
+    *"ec2 describe-spot-price-history"*)
+        echo "${STUB_SPOT_PRICE:-26.661700}"
+        exit 0
+        ;;
+    *"ec2 describe-security-groups"*)
+        echo "${STUB_SG_INGRESS:-None}"
+        exit 0
+        ;;
+    *"ec2 create-security-group"*)
+        echo "sg-0stub00000000000"
+        exit 0
+        ;;
+    *"ec2 authorize-security-group-ingress"*)
+        exit 0
+        ;;
+    *"ec2 describe-instances"*)
+        echo "${STUB_INSTANCE_STATE:-pending}"
+        exit 0
+        ;;
+    *"iam get-instance-profile"*)
+        echo '{"InstanceProfile":{"InstanceProfileName":"tpot-bench-ec2-profile"}}'
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac

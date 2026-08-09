@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# 假 lsblk：STUB_LSBLK 决定块设备清单（NAME SIZE MODEL，与 -dn -o 的列一致）。
+# 默认：一块 EBS 根盘 + 一块本地实例存储盘。
+set -uo pipefail
+printf 'lsblk %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+
+printf '%b\n' "${STUB_LSBLK:-nvme0n1 200G Amazon Elastic Block Store\nnvme1n1 3.5T Amazon EC2 NVMe Instance Storage}"

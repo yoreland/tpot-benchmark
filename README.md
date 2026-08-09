@@ -2,6 +2,39 @@
 
 > 场景：to-C Trip Planner ｜ 目标：时延敏感、低并发 ｜ 平台：AWS EKS + SGLang
 
+## 0. 怎么真的跑起来（先看这里）
+
+本仓库现在有**两条**执行路径，互不替代：
+
+| 路径 | 入口 | 适用 |
+|---|---|---|
+| **EKS 路径**（原有） | `scripts/run-benchmark.sh` | 已有 EKS 集群、走 kubectl 部署 |
+| **裸 EC2 路径**（新增） | `scripts/run-staged.sh` | 没有集群、想按台阶渐进验证、不希望流水线依赖某个会话 |
+
+裸 EC2 路径按四级台阶推进，前一级没过就不动下一级：
+`preflight($0)` → `plumbing(约 $0.01)` → `gpu-smoke(约 $1.2/hr)` → `full(上限约 $106.65)`。
+每一级都必须显式 `CONFIRM_SPEND=yes` 才会真的启动实例，默认是拒绝。
+
+```bash
+bash scripts/run-staged.sh          # 零花费预检，什么都不启动
+bash scripts/run-staged.sh --show-ledger   # 看哪一级已经过了、上次用的哪个 recipe
+```
+
+- **操作手册（可直接复制粘贴的命令、每级花费、故障速查表）**：
+  [docs/RUNBOOK.md](docs/RUNBOOK.md)
+- **上一次失败的完整复盘（13h14m / 约 $353 / 零产出，以及每条失败对应的修复）**：
+  [docs/postmortem-2026-08-07-p5en-run.md](docs/postmortem-2026-08-07-p5en-run.md)
+- **三个可直接替换的 H200 配置**：`scripts/recipes/`（换配置只改一个
+  `--recipe` 参数，不用改脚本）
+
+---
+
+## 0.1 Benchmark Reports
+
+| 日期 | 硬件 | 配置 | TPOT P50 | Output tok/s | 结果 | 报告 |
+|------|------|------|----------|-------------|------|------|
+| 2026-08-09 | H200 x4 (p5en.48xlarge) | tp=4, EAGLE 3/1/4, Marlin | 3.330 ms | 224.2 (custom) / 282.5 (official) | **PASS** | [reports/h200-tp4-eagle-20260809](reports/h200-tp4-eagle-20260809/) |
+
 ---
 
 ## 1. 结论摘要（TL;DR）
@@ -191,8 +224,33 @@ AWS 仓库 `dsv4pro-b300-single-node` 的 benchmark（input 2048 / output 256）
 测试价值在于**确立成本地板**，而非主力候选。预期劣化（两因素叠加）：
 
 - 带宽 4.8 vs 8 TB/s → TPOT **~1.7×**
-- 无原生 FP4，需跑 FP8 checkpoint（284 GB，每 token 读双倍字节）→ 再 **~2×**
-- 141 GB 单卡装不下 FP8 的 284 GB → 至少 tp=4，通信开销再叠加
+- 无原生 FP4（H200 是 Hopper SM90），MoE 专家权重必须换路径 → 再 **~2×**
+- 141 GB 单卡装不下整份权重 → 至少 tp=4，通信开销再叠加
+
+> **✅ 2026-08-08 更正（此前这里写「需跑 FP8 checkpoint（284 GB）」，不准确）**
+>
+> 实际 checkpoint 情况（HuggingFace API + SGLang cookbook 双向核对）：
+>
+> | 权重 | 精度 | 文件数 | 体积 | 说明 |
+> |---|---|---|---|---|
+> | `deepseek-ai/DeepSeek-V4-Flash` | **FP4 专家 + FP8 注意力/dense** | 73 | **159.6 GB / 148.7 GiB** | 官方 instruct 权重。`config.json` 里 `expert_dtype=fp4`、`quantization_config.quant_method=fp8`、`num_nextn_predict_layers=1` |
+> | `sgl-project/DeepSeek-V4-Flash-FP8` | 纯 FP8（重打包） | 55 | **294.1 GB / 273.9 GiB** | 这个才是原文「约 284 GB FP8」真正对应的东西，而它是**另一个 repo**，不是官方 instruct 权重 |
+> | `deepseek-ai/DeepSeek-V4-Flash-0731` | FP4 专家，附带 DSpark draft 头 | 74 | 166.9 GB / 155.4 GiB | cookbook 标注在 8×B200 / 4×GB300 / **4×H200** 已验证 |
+>
+> 因此 **Hopper（H100/H200）上按上游 cookbook 只有两条路，没有第三条**：
+>
+> 1. **直接用原始 FP4 权重**，走 **W4A16 Marlin** MoE kernel。这条路
+>    **只能纯 TP**，用不了 DP-attention，也用不了 DeepEP。
+> 2. **换成重打包的 FP8 权重** `sgl-project/DeepSeek-V4-Flash-FP8`
+>    （H100/H200 专用），**解锁 DP-attention + DeepEP**，代价是权重体积几乎翻倍
+>    （294.1 GB）。
+>
+> 另外：`deepseek-ai/DeepSeek-V4-Flash-Base` 确实是纯 FP8（`expert_dtype=fp8`），
+> 但 cookbook 明确写了 `*-Base` 仓库**只用于继续预训练，不可用于 chat 或
+> tool calling**，所以它**不是**合法替代品。
+>
+> 两条路各自对应一个可直接使用的 recipe：`scripts/recipes/h200-tp4-fp4-eagle.env`
+> 与 `scripts/recipes/h200-tp4-fp8-eagle.env`（第三个是 DSpark 变体）。
 
 **合计 TPOT 可能劣化 3× 以上**，对 TPOT 主导负载基本出局。但仍值得跑一个数据点：
 
@@ -304,7 +362,8 @@ AWS 上 Blackwell 仅有 48xlarge（8 GPU）一种规格，**无单卡/双卡 B2
 | 问题 | 说明 |
 |---|---|
 | **SGLang 不兼容 T4** | v0.5.12 的 flashinfer 不支持 SM 7.5（Turing），报 `KeyError: 'sm_75'`。最小化 demo 改用 vLLM v0.5.5 替代。**不影响 B200/B300**（SM 100+） |
-| **NVMe 路径差异** | HyperPod = `/opt/dlami/nvme/`，自建 EKS(RAID0) = `/mnt/k8s-disks/0/`。所有 manifest 需按环境修改，否则权重会写到小根盘 |
+| **NVMe 路径差异** | HyperPod = `/opt/dlami/nvme/`，自建 EKS(RAID0) = `/mnt/k8s-disks/0/`，裸 EC2 = `/mnt/nvme/`。所有 manifest 需按环境修改，否则权重会写到小根盘 |
+| **裸 EC2 本地实例存储不会自动挂载**（2026-08-07，代价约 $353） | `p5en.48xlarge` 自带 8 × 3800 GB = **30.4 TB** 本地 NVMe（`NvmeSupport=required`），但**不挂就等于没有**。那次启动一块都没挂，148.7 GiB 权重全挤在一块 200 GB gp3 根盘上（扣掉 OS 与约 12.75 GB 镜像只剩约 175 GB），第二次尝试「下载 150.98 GB 只写进 19.21 GB」= 盘满。**这正是上一行那条 NVMe 警告本该拦住的事故。** 修复：`scripts/bootstrap/bench-bootstrap.sh` 按 model 识别实例存储盘并组 RAID0 挂到 `/mnt/nvme`，下载前先断言可用空间。完整复盘见 [docs/postmortem-2026-08-07-p5en-run.md](docs/postmortem-2026-08-07-p5en-run.md) |
 | **仓库注释错误** | `dsv4flash-pd-deploy.yaml` 的 "500GB+ weights" 属 V4-Pro，Flash 实为 ~142GB |
 
 > ⚠️ 该 POC 使用 T4 + 1.5B 模型 + vLLM，**仅验证部署流程，性能数据不可外推**到 B300 + V4-Flash 场景。
@@ -421,11 +480,35 @@ V4-Flash 的 KV 压缩比极高（ShadowRadix + 混合注意力），40K input �
 基于 LMSYS 官方验证，锁定以下配置：
 
 ```bash
---speculative-algo EAGLE
+--speculative-algorithm EAGLE
 --speculative-num-steps 3
 --speculative-eagle-topk 1
 --speculative-num-draft-tokens 4
 ```
+
+> **✅ 2026-08-08 更正：flag 拼写是 `--speculative-algorithm`，不是
+> `--speculative-algo`。** 上游 server_arguments 文档与 cookbook 用的都是完整
+> 拼写；缩写形式不是有效参数，会让服务在启动时直接失败。
+> `scripts/run-benchmark.sh` 里那处错误拼写已一并修掉。
+
+> **➕ 2026-08-08 新增：0731 权重的 DSpark 替代方案**
+>
+> cookbook 3.4 节记录了另一条投机解码路径：`deepseek-ai/DeepSeek-V4-Flash-0731`
+> （74 个文件 / 166.9 GB / 155.4 GiB）**自带 DSpark draft 头**，
+> cookbook 标注它在 8×B200 / 4×GB300 / **4×H200** 上已验证。
+>
+> ```bash
+> --speculative-algorithm DSPARK
+> # 就这一行。不要加 --speculative-num-steps / --speculative-eagle-topk /
+> # --speculative-num-draft-tokens，也不要加 --speculative-draft-model-path：
+> # 目标权重与 draft 头在同一个 checkpoint 里，SGLang 直接从权重读 DSpark 形状。
+> ```
+>
+> 附加约束（cookbook 原文）：DSpark 需要 CUDA、`pp_size == 1`、**DP-attention
+> 必须关闭**，且与 PD 分离不兼容。`--speculative-dspark-block-size N` 可选，
+> 省略时读 checkpoint 的值（当前 0731 权重解析为 5 个提议 token，即已验证默认值）。
+>
+> 现成 recipe：`scripts/recipes/h200-tp4-dspark-0731.env`。
 
 **为什么不用 MTP（修正之前的推荐）：**
 

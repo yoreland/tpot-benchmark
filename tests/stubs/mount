@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 假 mount：只记录调用，绝不真的挂载沙箱里的任何东西。
+set -uo pipefail
+printf 'mount %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+exit 0

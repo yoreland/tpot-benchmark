@@ -1,0 +1,26 @@
+# =============================================================================
+# tpot-benchmark ignore 规则
+# =============================================================================
+
+# benchmark 运行产物：results/ 只跟踪 .gitkeep
+results/*
+!results/.gitkeep
+
+# 运行时渲染的 user-data / 启动脚本（绝不入库）
+user-data*.sh
+user-data*.txt
+*.user-data
+*.rendered
+
+# 预检 / 下载过程中的临时清单与缓存
+*-manifest.json
+hf-*.json
+checkpoint-*.json
+.scratch/
+tmp/
+*.tmp
+*.log
+
+# 凭证与私钥（历史上 tpot-bench-key 的私钥丢失，这里做兜底防护）
+*.pem
+*.key
