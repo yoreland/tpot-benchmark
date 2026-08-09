@@ -55,6 +55,7 @@ SUBNET_MAP = {
     "us-east-2b": "subnet-0c900c1611bf34e49",
     "us-east-2c": "subnet-087bce7226890195e",
     "us-west-2a": "subnet-0570e1b3d4cabf650",
+    "us-west-2b": "subnet-020aa087d32834a04",
     "us-west-2c": "subnet-08a022641b49f4630",
     "us-west-2d": "subnet-03f3fa89ad241fbbb",
 }
@@ -88,14 +89,14 @@ TARGETS = [
         "instance_type": "p6-b300.48xlarge",
         "max_price": "60",
         "region": "us-east-1",
-        "azs": ["us-east-1a", "us-east-1c"],
+        "azs": ["us-east-1a"],
         "recipe_file": "recipes/b300-tp2-dp2-fp4-megamoe.env",
     },
     {
         "instance_type": "p6-b300.48xlarge",
         "max_price": "60",
         "region": "us-west-2",
-        "azs": ["us-west-2a", "us-west-2c"],
+        "azs": ["us-west-2a", "us-west-2b"],
         "recipe_file": "recipes/b300-tp2-dp2-fp4-megamoe.env",
     },
 ]
