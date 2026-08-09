@@ -29,6 +29,14 @@ bash scripts/run-staged.sh --show-ledger   # 看哪一级已经过了、上次�
 
 ---
 
+## 0.1 Benchmark Reports
+
+| 日期 | 硬件 | 配置 | TPOT P50 | Output tok/s | 结果 | 报告 |
+|------|------|------|----------|-------------|------|------|
+| 2026-08-09 | H200 x4 (p5en.48xlarge) | tp=4, EAGLE 3/1/4, Marlin | 3.330 ms | 224.2 (custom) / 282.5 (official) | **PASS** | [reports/h200-tp4-eagle-20260809](reports/h200-tp4-eagle-20260809/) |
+
+---
+
 ## 1. 结论摘要（TL;DR）
 
 | 项 | 结论 |
