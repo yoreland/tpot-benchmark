@@ -566,17 +566,10 @@ def lambda_handler(event, context):
                 logger.warning("No subnet for %s, skipping", az)
                 continue
 
-            # Probe
-            probe_id = _probe_capacity(
-                ec2_client, instance_type, ami, az, subnet, sg, max_price
-            )
-            if not probe_id:
-                continue
-
-            # Capacity found! Terminate probe immediately
-            _terminate_instance(ec2_client, probe_id)
-
-            # Generate run ID and launch real benchmark
+            # Direct launch: skip probe-then-relaunch pattern.
+            # B300 capacity windows are <20s; probe+terminate+relaunch loses
+            # the race every time. Instead, launch the full benchmark instance
+            # directly. If no capacity, RunInstances simply returns an error.
             run_id = _generate_run_id()
 
             instance_id = _launch_benchmark(
@@ -585,10 +578,7 @@ def lambda_handler(event, context):
             )
 
             if not instance_id:
-                logger.warning(
-                    "Probe succeeded but benchmark launch failed for %s @ %s",
-                    instance_type, az,
-                )
+                continue
                 continue
 
             # Success! Record, notify, and potentially disable rule
