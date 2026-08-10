@@ -1,23 +1,7 @@
-# docker-compose-pd-v4flash-b300.yaml
-# PD Disaggregation: 3 Prefill (tp=2) + 1 Decode (tp=2, EAGLE) + sglang-router
-# Target: B300 8-GPU instance, DeepSeek-V4-Flash
-#
-# Validated on i-01ac85bde661e57f8 (p6-b300.48xlarge, us-west-2b, 2026-08-10)
-# Results: TPOT P50 3.60ms, TTFT P95 1082ms, throughput 221 tok/s (40K/1.5K)
-#
-# Key parameters (proven by S3 failure logs + successful runs):
-#   - Image v0.5.17-cu130 (v0.5.12.post1 has flash-mla kernel crash on >=16K)
-#   - MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384 (v0.5.17 requires >= chunked_prefill_size)
-#   - dp-attention disabled (causes AssertionError + GPU memory drops to 0)
-#   - Transfer backend: nixl (mooncake doesn't work for same-node PD)
-#   - Router --prefill includes bootstrap port (required for PD handshake)
-#   - EAGLE on decode only (accept_length ~2.85, cuts TPOT by ~2.2x)
-#   - runtime: nvidia required for NVIDIA_VISIBLE_DEVICES to work in compose
-#
-# Usage:
-#   docker compose -f docker-compose-pd-v4flash-b300.yaml up -d
-#   # Wait ~20-25 min for all engines to load + JIT compile
-#   # Then bench against http://127.0.0.1:30080
+# docker-compose-pd-2p2d.yaml
+# PD Disaggregation: 2 Prefill (tp=2) + 2 Decode (tp=2, EAGLE) + router
+# Target: B300 8-GPU, DeepSeek-V4-Flash
+# Purpose: Compare with 3P1D — same TPOT but 2x decode parallelism for throughput
 
 volumes:
   jitcache:
@@ -79,7 +63,7 @@ services:
       <<: *healthcheck-base
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:30100/health"]
 
-  prefill-2:
+  decode-0:
     <<: *common-service
     environment:
       <<: *common-env
@@ -90,13 +74,15 @@ services:
       --tp 2 --moe-a2a-backend megamoe --mem-fraction-static 0.85
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
       --disaggregation-transfer-backend nixl
-      --disaggregation-mode prefill --disaggregation-bootstrap-port 9200
+      --disaggregation-mode decode --disaggregation-bootstrap-port 9200
+      --speculative-algorithm EAGLE --speculative-num-steps 3
+      --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
       --host 0.0.0.0 --port 30200
     healthcheck:
       <<: *healthcheck-base
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:30200/health"]
 
-  decode-0:
+  decode-1:
     <<: *common-service
     environment:
       <<: *common-env
@@ -125,16 +111,16 @@ services:
         condition: service_healthy
       prefill-1:
         condition: service_healthy
-      prefill-2:
-        condition: service_healthy
       decode-0:
+        condition: service_healthy
+      decode-1:
         condition: service_healthy
     command: >
       python3 -m sglang_router.launch_router
       --pd-disaggregation
       --prefill http://127.0.0.1:30000 9000
       --prefill http://127.0.0.1:30100 9100
-      --prefill http://127.0.0.1:30200 9200
+      --decode http://127.0.0.1:30200
       --decode http://127.0.0.1:30300
       --host 0.0.0.0 --port 30080
       --worker-startup-timeout-secs 60

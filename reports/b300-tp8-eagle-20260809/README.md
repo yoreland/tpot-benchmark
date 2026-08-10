@@ -6,6 +6,30 @@
 
 ---
 
+## ⚠️ 勘误（2026-08-10 追加）
+
+**本报告所有负载口径标注与实际下发不符，下面的性能数字不能按标题的 token 数解读。**
+
+从本报告自带的 `bench_custom.json` / `bench_official.json` 反算实际 token 数：
+
+| 本报告声称 | 实际下发 | 偏差 |
+|---|---|---|
+| 40000 in / 1500 out | **16109 in / 708 out** | input 40%，output 47% |
+| 30000 in / 4096 out | **15420 in / 2215 out** | input 51%，output 54% |
+| 8000 in / 1500 out（并发扫描） | **4161 in / 759 out** | input 52%，output 51% |
+
+**根因**：`sglang.bench_serving` 的 `--random-range-ratio` 默认不是 1.0，默认在 `[0, max]` 均匀采样长度，平均只有目标值一半。固定长度必须显式传 `--random-range-ratio 1.0`。
+
+**所以下文的 `TPOT P50 3.34 ms` 是 16K/708 口径的结果，不是 40K/1.5K 的。**
+
+真 40K/1.5K 口径下的 tp=8 实测（2026-08-10，v0.5.17）：
+**TPOT P50 3.475 ms / TTFT P50 683 ms / TTFT P95 1940 ms / 输出吞吐 247.8 tok/s**
+详见 [`reports/b300-pd-customer-validation-20260810/`](../b300-pd-customer-validation-20260810/README.md)。
+
+同一问题也影响 `reports/h200-tp4-*` 的数字，需要复核。
+
+---
+
 ## 1. 测试结论
 
 | 验收项 | 目标 | 实测 | 结果 |
