@@ -49,15 +49,16 @@ declare -a TARGETS=(
     "p5en.48xlarge us-west-2 us-west-2c 35 scripts/recipes/h200-tp4-fp4-eagle.env"
     "p5en.48xlarge us-west-2 us-west-2d 35 scripts/recipes/h200-tp4-fp4-eagle.env"
     # B300 targets (p6-b300.48xlarge) - max $60
-    "p6-b300.48xlarge us-east-1 us-east-1a 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
-    "p6-b300.48xlarge us-east-1 us-east-1c 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
-    "p6-b300.48xlarge us-east-2 us-east-2a 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
-    "p6-b300.48xlarge us-east-2 us-east-2b 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
-    "p6-b300.48xlarge us-east-2 us-east-2c 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
-    "p6-b300.48xlarge us-west-2 us-west-2a 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
-    "p6-b300.48xlarge us-west-2 us-west-2b 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
-    "p6-b300.48xlarge us-west-2 us-west-2c 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
-    "p6-b300.48xlarge us-west-2 us-west-2d 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
+    # Using hold recipe: downloads weights, stays alive for manual PD docker-compose deploy
+    "p6-b300.48xlarge us-east-1 us-east-1a 60 scripts/recipes/b300-pd-hold.env"
+    "p6-b300.48xlarge us-east-1 us-east-1c 60 scripts/recipes/b300-pd-hold.env"
+    "p6-b300.48xlarge us-east-2 us-east-2a 60 scripts/recipes/b300-pd-hold.env"
+    "p6-b300.48xlarge us-east-2 us-east-2b 60 scripts/recipes/b300-pd-hold.env"
+    "p6-b300.48xlarge us-east-2 us-east-2c 60 scripts/recipes/b300-pd-hold.env"
+    "p6-b300.48xlarge us-west-2 us-west-2a 60 scripts/recipes/b300-pd-hold.env"
+    "p6-b300.48xlarge us-west-2 us-west-2b 60 scripts/recipes/b300-pd-hold.env"
+    "p6-b300.48xlarge us-west-2 us-west-2c 60 scripts/recipes/b300-pd-hold.env"
+    "p6-b300.48xlarge us-west-2 us-west-2d 60 scripts/recipes/b300-pd-hold.env"
 )
 
 log() {
@@ -169,7 +170,7 @@ log "Targets: p5en.48xlarge (H200, max \$35) + p6-b300.48xlarge (B300, max \$60)
 log "Regions: us-east-1 (1a,1c), us-east-2 (2a,2b,2c), us-west-2 (2a,2b,2c,2d)"
 log "Interval: ${POLL_INTERVAL}s"
 log "NO B200 (triton MoE bug)"
-log "Recipes: h200-tp4-fp4-eagle.env / b300-tp2-dp2-fp4-megamoe.env"
+log "Recipes: h200-tp4-fp4-eagle.env / b300-pd-hold.env (hold mode, no auto-bench)"
 log "========================================================"
 
 round=0
