@@ -35,6 +35,12 @@ bash scripts/run-staged.sh --show-ledger   # 看哪一级已经过了、上次�
 |------|------|------|----------|-------------|------|------|
 | 2026-08-09 | H200 x4 (p5en.48xlarge) | tp=4, EAGLE 3/1/4, Marlin | 3.330 ms | 224.2 (custom) / 282.5 (official) | **PASS** | [reports/h200-tp4-eagle-20260809](reports/h200-tp4-eagle-20260809/) |
 | 2026-08-09 | B300 x8 (p6-b300.48xlarge) | tp=8, EAGLE 3/1/4, megamoe | 3.337 ms | 191.5 (custom) / 281.7 (official) | **PASS** | [reports/b300-tp8-eagle-20260809](reports/b300-tp8-eagle-20260809/) |
+| 2026-08-10 | H200 x4 (p5en.48xlarge) | tp=4, EAGLE 3/1/4, Marlin — **并发扫描** 8K/1.5K c=1~32 | 3.256 ms (c=1) → 8.072 ms (c=32) | 286.2 (c=1) → 2,090.4 (c=32)，扩展 7.31x | **PASS** | [reports/h200-tp4-eagle-20260809 §5](reports/h200-tp4-eagle-20260809/#5-并发扫描-concurrency-sweep) |
+
+> 并发扫描的核心结论：8K/1.5K 负载下，H200 tp=4 守住 TPOT P50 ≤ 4.5 ms 的并发上限是 **2**；
+> 并发开到 32 可换 7.31x 吞吐，代价是 TPOT P50 升到 8.07 ms。
+> B300 的现有扫描跑在旧版 SGLang (0.5.12.post1) 上，**不能与之做定量硬件对比**，
+> 原因见 [B300 报告 5.2](reports/b300-tp8-eagle-20260809/#52-已补上的-h200-对比以及本节数据的两个已知问题)。
 
 ---
 

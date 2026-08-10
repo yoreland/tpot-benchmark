@@ -1,0 +1,41 @@
+{
+  "run_id": "20260810-015049-2b75",
+  "stage": "full",
+  "region": "us-east-2",
+  "instance_id": "i-0fe1759772050cdf8",
+  "instance_type": "p5en.48xlarge",
+  "model": "deepseek-ai/DeepSeek-V4-Flash",
+  "sglang_image": "lmsysorg/sglang:v0.5.17",
+  "tp_size": 4,
+  "serve_args": "--model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash --tp 4 --mem-fraction-static 0.85 --trust-remote-code --host 0.0.0.0 --port 30000 --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --moe-runner-backend marlin --enable-metrics",
+  "custom_benchmark_file": "bench_custom_20260810-015049-2b75.json",
+  "official_benchmark_file": "bench_official_20260810-015049-2b75.json",
+  "custom_pass": true,
+  "official_pass": true,
+  "config": {
+    "input_tokens": 40000,
+    "output_tokens": 1500,
+    "official_input_tokens": 30000,
+    "official_output_tokens": 4096,
+    "num_prompts": 50,
+    "max_concurrency": 1
+  },
+  "concurrency_sweep": {
+    "enabled": true,
+    "spec": "1 2 4 8 16 32 16:128 32:128",
+    "input_tokens": 8000,
+    "output_tokens": 1500,
+    "default_num_prompts": 32,
+    "levels": [
+      {"max_concurrency": 1, "num_prompts": 32, "file": "bench_c1.json", "pass": true},
+      {"max_concurrency": 2, "num_prompts": 32, "file": "bench_c2.json", "pass": true},
+      {"max_concurrency": 4, "num_prompts": 32, "file": "bench_c4.json", "pass": true},
+      {"max_concurrency": 8, "num_prompts": 32, "file": "bench_c8.json", "pass": true},
+      {"max_concurrency": 16, "num_prompts": 32, "file": "bench_c16.json", "pass": true},
+      {"max_concurrency": 32, "num_prompts": 32, "file": "bench_c32.json", "pass": true},
+      {"max_concurrency": 16, "num_prompts": 128, "file": "bench_c16_p128.json", "pass": true},
+      {"max_concurrency": 32, "num_prompts": 128, "file": "bench_c32_p128.json", "pass": true}
+    ]
+  },
+  "elapsed_seconds": 2545
+}
