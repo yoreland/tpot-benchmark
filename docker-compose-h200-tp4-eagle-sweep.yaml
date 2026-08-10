@@ -1,0 +1,127 @@
+# =============================================================================
+# DeepSeek-V4-Flash H200 tp=4 EAGLE Unified + Concurrency Sweep
+#
+# 等效于 2026-08-10 在 p5en.48xlarge 上跑出 reports/h200-tp4-eagle-20260809/
+# concurrency-sweep/ 那组数据时的完整部署配置。
+#
+# 原始运行方式是 bench-bootstrap.sh 里的裸 docker run + docker exec，
+# 这里翻译成 docker compose 格式，便于在有 compose 环境的机器上复现。
+#
+# 实测环境:
+#   - 实例: p5en.48xlarge (8x H200 141GB HBM3e, 只用了其中 4 张)
+#   - Run ID: 20260810-015049-2b75
+#   - 实例 ID: i-0fe1759772050cdf8
+#   - Region: us-east-2a
+#   - 总耗时: 42.4 min (含冷启动 22 min)
+#   - 成本: ~$19.8 (spot $26.62/hr)
+#
+# 使用:
+#   1) 确保权重已下载到 /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash
+#   2) docker compose -f docker-compose-h200-tp4-eagle-sweep.yaml up -d
+#   3) 等待 /health 就绪 (首次冷启动约 20 min, DeepGEMM JIT + CUDA graph capture)
+#   4) 进容器跑 bench (见底部注释)
+#
+# 服务端关键参数 (从 bench_c1.json server_info 提取的实际生效值):
+#   version: 0.5.17
+#   tp_size: 4, dp_size: 1, ep_size: 1, pp_size: 1
+#   moe_runner_backend: marlin (W4A16 for Hopper SM90)
+#   moe_a2a_backend: none
+#   attention_backend: dsv4
+#   sampling_backend: flashinfer
+#   kv_cache_dtype: fp8_e4m3
+#   chunked_prefill_size: 8192
+#   max_prefill_tokens: 16384
+#   max_running_requests: 256
+#   max_total_num_tokens: 8375040
+#   page_size: 256
+#   schedule_policy: fcfs
+#   cuda_graph decode max_bs: 512 (自动, 未显式指定)
+#   speculative: EAGLE steps=3 topk=1 draft_tokens=4
+# =============================================================================
+
+services:
+  sglang-server:
+    image: lmsysorg/sglang:v0.5.17
+    container_name: sglang-server
+    runtime: nvidia
+    ipc: host
+    shm_size: "64g"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    network_mode: host
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      # 权重目录 - 实测 159.6 GB (73 files, FP4 experts + FP8 dense)
+      - /opt/dlami/nvme:/opt/dlami/nvme
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --model-path
+      - /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash
+      - --tp
+      - "4"
+      - --mem-fraction-static
+      - "0.85"
+      - --trust-remote-code
+      - --host
+      - 0.0.0.0
+      - --port
+      - "30000"
+      # EAGLE 投机解码 (low-latency preset)
+      - --speculative-algorithm
+      - EAGLE
+      - --speculative-num-steps
+      - "3"
+      - --speculative-eagle-topk
+      - "1"
+      - --speculative-num-draft-tokens
+      - "4"
+      # Hopper FP4 走 Marlin W4A16 MoE kernels (cookbook 指定)
+      - --moe-runner-backend
+      - marlin
+      - --enable-metrics
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:30000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 160          # 15s * 160 = 40 min, 覆盖冷启动
+      start_period: 60s
+
+# =============================================================================
+# 复现并发扫描的命令 (等 healthcheck 通过后执行):
+#
+# 基线 bench (与已发表报告 reports/h200-tp4-eagle-20260809/ 同口径):
+#   docker exec sglang-server python3 -m sglang.bench_serving --backend sglang \
+#     --dataset-name random --num-prompts 50 --max-concurrency 1 \
+#     --random-input 40000 --random-output 1500
+#
+#   docker exec sglang-server python3 -m sglang.bench_serving --backend sglang \
+#     --dataset-name random --num-prompts 50 --max-concurrency 1 \
+#     --random-input 30000 --random-output 4096
+#
+# 并发扫描 6 档 (与 B300 报告逐字同口径):
+#   for C in 1 2 4 8 16 32; do
+#     docker exec sglang-server python3 -m sglang.bench_serving --backend sglang \
+#       --dataset-name random --num-prompts 32 --max-concurrency $C \
+#       --random-input 8000 --random-output 1500 \
+#       --output-file /opt/dlami/nvme/results/bench_c${C}.json
+#   done
+#
+# 高并发加样本档 (验证 32 prompts 是否足够):
+#   for C in 16 32; do
+#     docker exec sglang-server python3 -m sglang.bench_serving --backend sglang \
+#       --dataset-name random --num-prompts 128 --max-concurrency $C \
+#       --random-input 8000 --random-output 1500 \
+#       --output-file /opt/dlami/nvme/results/bench_c${C}_p128.json
+#   done
+# =============================================================================
