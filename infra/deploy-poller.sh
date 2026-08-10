@@ -162,13 +162,15 @@ mkdir -p "$WORK_DIR/recipes"
 cp "$REPO_ROOT/scripts/bootstrap/bench-bootstrap.sh" "$WORK_DIR/bench-bootstrap.sh"
 cp "$REPO_ROOT/scripts/recipes/h200-tp4-fp4-eagle.env" "$WORK_DIR/recipes/h200-tp4-fp4-eagle.env"
 cp "$REPO_ROOT/scripts/recipes/b300-pd-hold.env" "$WORK_DIR/recipes/b300-pd-hold.env"
+cp "$REPO_ROOT/scripts/recipes/h200-hold.env" "$WORK_DIR/recipes/h200-hold.env"
 
 # Create zip
 (cd "$WORK_DIR" && zip -r "$ZIP_FILE" \
     handler.py \
     bench-bootstrap.sh \
     recipes/h200-tp4-fp4-eagle.env \
-    recipes/b300-pd-hold.env)
+    recipes/b300-pd-hold.env \
+    recipes/h200-hold.env)
 
 ZIP_SIZE=$(wc -c < "$ZIP_FILE" | tr -d ' ')
 log "  Lambda zip: $ZIP_FILE ($ZIP_SIZE bytes)"
