@@ -1,0 +1,182 @@
+# docker-compose-pd-v4flash-b300.yaml
+# PD Disaggregation: 3 Prefill (tp=2) + 1 Decode (tp=2) + sglang-router
+# Target: B300 8-GPU instance, DeepSeek-V4-Flash
+#
+# This is for on-machine verification. The nixl transfer backend must be
+# confirmed working in Phase 2 gate before using this in production.
+#
+# Key corrections from S3 failure logs:
+#   - Image v0.5.17-cu130 (v0.5.12.post1 has flash-mla kernel crash on >=16K inputs)
+#   - MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384 (validated by v0.5.17 server startup)
+#   - dp-attention disabled (causes AssertionError + GPU memory drops to 0)
+#   - Transfer backend: nixl (mooncake doesn't work for same-node)
+#   - Router --prefill includes bootstrap port (required for PD routing)
+
+volumes:
+  jitcache:
+
+services:
+  prefill-0:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - jitcache:/root/.cache
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0,1
+      - SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384
+      - SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800
+      - SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash
+      --tp 2
+      --moe-a2a-backend megamoe
+      --mem-fraction-static 0.85
+      --trust-remote-code
+      --cuda-graph-max-bs 64
+      --enable-metrics
+      --disaggregation-transfer-backend nixl
+      --disaggregation-mode prefill
+      --disaggregation-bootstrap-port 9000
+      --host 0.0.0.0
+      --port 30000
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s
+
+  prefill-1:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - jitcache:/root/.cache
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=2,3
+      - SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384
+      - SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800
+      - SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash
+      --tp 2
+      --moe-a2a-backend megamoe
+      --mem-fraction-static 0.85
+      --trust-remote-code
+      --cuda-graph-max-bs 64
+      --enable-metrics
+      --disaggregation-transfer-backend nixl
+      --disaggregation-mode prefill
+      --disaggregation-bootstrap-port 9100
+      --host 0.0.0.0
+      --port 30100
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30100/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s
+
+  prefill-2:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - jitcache:/root/.cache
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=4,5
+      - SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384
+      - SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800
+      - SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash
+      --tp 2
+      --moe-a2a-backend megamoe
+      --mem-fraction-static 0.85
+      --trust-remote-code
+      --cuda-graph-max-bs 64
+      --enable-metrics
+      --disaggregation-transfer-backend nixl
+      --disaggregation-mode prefill
+      --disaggregation-bootstrap-port 9200
+      --host 0.0.0.0
+      --port 30200
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30200/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s
+
+  decode-0:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - jitcache:/root/.cache
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=6,7
+      - SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384
+      - SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800
+      - SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash
+      --tp 2
+      --moe-a2a-backend megamoe
+      --mem-fraction-static 0.85
+      --trust-remote-code
+      --cuda-graph-max-bs 64
+      --enable-metrics
+      --disaggregation-transfer-backend nixl
+      --disaggregation-mode decode
+      --disaggregation-bootstrap-port 9300
+      --host 0.0.0.0
+      --port 30300
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30300/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s
+
+  router:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - jitcache:/root/.cache
+    depends_on:
+      prefill-0:
+        condition: service_healthy
+      prefill-1:
+        condition: service_healthy
+      prefill-2:
+        condition: service_healthy
+      decode-0:
+        condition: service_healthy
+    command: >
+      python3 -m sglang_router.launch_router
+      --pd-disaggregation
+      --prefill http://127.0.0.1:30000 9000
+      --prefill http://127.0.0.1:30100 9100
+      --prefill http://127.0.0.1:30200 9200
+      --decode http://127.0.0.1:30300
+      --host 0.0.0.0
+      --port 30080
+      --worker-startup-timeout-secs 2400
+      --request-timeout-secs 3600

@@ -1,0 +1,7 @@
+{
+  "task_id": "task-b300-pd-phase0",
+  "task_description": "Phase 0 preparation for B300 PD 3P1D testing: create docker-compose file with corrected parameters, fix capacity poller to include us-west-2b, and add PD disaggregation config to b300-run-config.sh",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}
