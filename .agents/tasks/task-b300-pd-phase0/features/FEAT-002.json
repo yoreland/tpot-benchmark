@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "fix",
   "description": "Fix capacity poller to include us-west-2b (the AZ where B300 was previously acquired) and add PD config to b300-run-config.sh",
-  "status": "pending",
+  "status": "in_progress",
   "steps": [
     "In scripts/poll-b300-h200.sh, add us-west-2b to SUBNET_MAP: SUBNET_MAP[\"us-west-2b\"]=\"subnet-0594a48bad1aef4a6\"",
     "In scripts/poll-b300-h200.sh, add two new entries to TARGETS array (one for H200, one for B300) for us-west-2b, inserted alongside the other us-west-2 entries: 'p5en.48xlarge us-west-2 us-west-2b 35 scripts/recipes/h200-tp4-fp4-eagle.env' and 'p6-b300.48xlarge us-west-2 us-west-2b 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env'",

@@ -92,6 +92,7 @@ list_configs_indented() {
   c1t-tp8-eagle-nsatilelang c1 + NSA 稀疏注意力内核换成 tilelang：已实测**无效**，留作记录
   c1c-tp8-eagle-nochunk    c1 + 关闭 chunked prefill：已实测**无效**，同一个内核同一行照样崩，留作记录
   c1b-tp8-megamoe-noeagle  与 c1 只差「关掉 EAGLE」：c1 在 flash-mla decode 内核崩了，用它定位是不是投机解码这条路的问题
+  pd-3p1d-nixl              3P+1D PD 分离（nixl KV 传输）: 3 prefill tp=2 + 1 decode tp=2 + router，用 docker-compose
 EOF
 }
 
@@ -244,6 +245,23 @@ resolve_config() {
             CONFIG_DESC="tp=8 unified + megamoe，无投机解码（c1 崩溃定位用）"
             CONFIG_ENV_ARGS="-e SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=8320"
             CONFIG_SERVE_ARGS="--model-path $MODEL_PATH --tp 8 --moe-a2a-backend megamoe --mem-fraction-static 0.85 --trust-remote-code --host 0.0.0.0 --port 30000 --cuda-graph-max-bs 64 --enable-metrics"
+            ;;
+        pd-3p1d-nixl)
+            # PD 分离架构：3 个 prefill 引擎（tp=2）+ 1 个 decode 引擎（tp=2）+ sglang-router。
+            # 与其他配置不同，这个配置使用 docker compose（docker-compose-pd-v4flash-b300.yaml）
+            # 而不是单容器 docker run。启动/就绪/bench 流程需要相应适配（Phase 1+ 工作）。
+            # 当前 CONFIG_SERVE_ARGS 设为 --pd-compose 标记值，launch 步检测到它后
+            # 改走 docker compose up -d，readiness 步轮询 30080/health（router 端口），
+            # bench 步用 docker exec 进 decode-0 容器（它能看到所有引擎的输出）。
+            #
+            # 为什么是 nixl：mooncake 在同节点场景下 KV 传输不通（SGLang issue #12661），
+            # nixl/UCX 原生支持 intra-node CUDA IPC。Phase 2 门禁会验证 nixl 是否可用。
+            # 为什么 env=16384：v0.5.17 校验 >=chunked_prefill_size（默认 16384），
+            # 8320 会导致 ValueError（c1n server.log 实证）。
+            CONFIG_DESC="3P+1D PD disaggregation (nixl transfer, docker-compose): 3x prefill tp=2 + 1x decode tp=2 + router on port 30080"
+            CONFIG_IMAGE="lmsysorg/sglang:v0.5.17-cu130"
+            CONFIG_ENV_ARGS="-e SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384 -e SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800 -e SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800"
+            CONFIG_SERVE_ARGS="--pd-compose"
             ;;
         *)
             return 1
