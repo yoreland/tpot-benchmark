@@ -90,14 +90,14 @@ TARGETS = [
         "max_price": "60",
         "region": "us-east-1",
         "azs": ["us-east-1a"],
-        "recipe_file": "recipes/b300-tp2-dp2-fp4-megamoe.env",
+        "recipe_file": "recipes/b300-pd-hold.env",
     },
     {
         "instance_type": "p6-b300.48xlarge",
         "max_price": "60",
         "region": "us-west-2",
         "azs": ["us-west-2a", "us-west-2b"],
-        "recipe_file": "recipes/b300-tp2-dp2-fp4-megamoe.env",
+        "recipe_file": "recipes/b300-pd-hold.env",
     },
 ]
 
