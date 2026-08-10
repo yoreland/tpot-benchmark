@@ -85,6 +85,17 @@ OFFICIAL_OUTPUT_TOKENS="${OFFICIAL_OUTPUT_TOKENS:-4096}"
 NUM_PROMPTS="${NUM_PROMPTS:-50}"
 MAX_CONCURRENCY="${MAX_CONCURRENCY:-1}"
 
+# --- 并发扫描（吞吐-延迟 tradeoff 曲线）---
+# SWEEP_SPEC 为空 => 完全不跑，行为与改动前一致。
+# 语法: 空格分隔的 "并发[:prompts]" token，例如 "1 2 4 8 16 32 32:128"
+#   - 不带 :prompts 的用 SWEEP_NUM_PROMPTS，输出 bench_c<N>.json（与 B300 报告同名）
+#   - 带 :prompts 的输出 bench_c<N>_p<P>.json（用于在高并发档加大样本量）
+# 每一级跑完立刻单独上传 S3：spot 随时可能被回收，绝不批量攒到最后再传。
+SWEEP_SPEC="${SWEEP_SPEC:-}"
+SWEEP_INPUT_TOKENS="${SWEEP_INPUT_TOKENS:-8000}"
+SWEEP_OUTPUT_TOKENS="${SWEEP_OUTPUT_TOKENS:-1500}"
+SWEEP_NUM_PROMPTS="${SWEEP_NUM_PROMPTS:-32}"
+
 # --- 盘外持久化 / 遥测 / 看门狗 ---
 STREAM_INTERVAL_SECONDS="${STREAM_INTERVAL_SECONDS:-30}"
 GPU_SAMPLE_INTERVAL_SECONDS="${GPU_SAMPLE_INTERVAL_SECONDS:-30}"
@@ -157,6 +168,9 @@ NVME_DEVICES=()
 NVME_TARGET=""
 CUSTOM_PASS=false
 OFFICIAL_PASS=false
+# 并发扫描逐级记账：SWEEP_DONE / SWEEP_FAILED 存放已完成与失败的 "并发:prompts:文件名"
+SWEEP_DONE=()
+SWEEP_FAILED=()
 
 # =============================================================================
 # 工具函数
@@ -254,6 +268,7 @@ phase_code() {
         starting_server)   echo 50 ;;
         server_ready)      echo 55 ;;
         benchmarking)      echo 60 ;;
+        sweeping)          echo 65 ;;
         finalizing)        echo 70 ;;
         completed)         echo 100 ;;
         spot_interrupted)  echo 90 ;;
@@ -1052,6 +1067,67 @@ run_bench_case() {
     return 1
 }
 
+# 并发扫描的单级执行：与 run_bench_case 的区别是并发/prompts 由参数给定，
+# 且跑完立刻单独 sync 一次 S3（spot 被回收时已完成的档位不能丢）
+run_sweep_level() {
+    local conc="$1" prompts="$2" outfile="$3" label="$4"
+    log "运行 bench_serving [$label]: input=$SWEEP_INPUT_TOKENS output=$SWEEP_OUTPUT_TOKENS" \
+        "prompts=$prompts concurrency=$conc"
+    # bench_serving 是「追加」写入，重跑同名文件会叠加成多条记录，先删干净
+    rm -f "$outfile"
+    if docker exec "$CONTAINER_NAME" \
+            python3 -m sglang.bench_serving --backend sglang \
+                --dataset-name random \
+                --random-input "$SWEEP_INPUT_TOKENS" \
+                --random-output "$SWEEP_OUTPUT_TOKENS" \
+                --num-prompts "$prompts" \
+                --max-concurrency "$conc" \
+                --output-file "$outfile" >>"$LOG_DIR/bench-$label.log" 2>&1; then
+        log "  [$label] 完成 -> $outfile"
+        return 0
+    fi
+    warn "[$label] bench_serving 退出非零，日志见 $LOG_DIR/bench-$label.log"
+    return 1
+}
+
+# SWEEP_SPEC 解析 + 逐级执行。任何一级失败都只记账、不中断后续档位：
+# 高并发档 OOM 是预期可能结果，不该让已经排队好的其他档位一起报废。
+run_sweep() {
+    [[ -z "$SWEEP_SPEC" ]] && return 0
+    section "Step f-2) 并发扫描 (input=$SWEEP_INPUT_TOKENS output=$SWEEP_OUTPUT_TOKENS)"
+    set_phase sweeping "并发扫描: $SWEEP_SPEC"
+    local token conc prompts outfile label basename
+    for token in $SWEEP_SPEC; do
+        conc="${token%%:*}"
+        if [[ "$token" == *:* ]]; then
+            prompts="${token##*:}"
+        else
+            prompts="$SWEEP_NUM_PROMPTS"
+        fi
+        if ! [[ "$conc" =~ ^[0-9]+$ ]] || ! [[ "$prompts" =~ ^[0-9]+$ ]] \
+           || (( conc < 1 )) || (( prompts < 1 )); then
+            warn "SWEEP_SPEC token 非法，跳过: '$token'（应为 正整数[:正整数]）"
+            continue
+        fi
+        if (( prompts == SWEEP_NUM_PROMPTS )); then
+            basename="bench_c${conc}"
+        else
+            basename="bench_c${conc}_p${prompts}"
+        fi
+        outfile="$RESULTS_DIR/${basename}.json"
+        label="sweep-c${conc}-p${prompts}"
+        if run_sweep_level "$conc" "$prompts" "$outfile" "$label"; then
+            SWEEP_DONE+=("${conc}:${prompts}:${basename}.json")
+        else
+            SWEEP_FAILED+=("${conc}:${prompts}:${basename}.json")
+        fi
+        # 每一级单独落 S3：不攒批
+        sync_to_s3 "并发扫描 c=${conc} p=${prompts} 完成"
+        heartbeat || true
+    done
+    log "并发扫描结束: 成功 ${#SWEEP_DONE[@]} 级，失败 ${#SWEEP_FAILED[@]} 级"
+}
+
 serve_and_bench() {
     section "Step f) 启动 SGLang 并运行 benchmark"
     if [[ "$RUN_SERVER" != "true" ]]; then
@@ -1073,12 +1149,41 @@ serve_and_bench() {
         OFFICIAL_PASS=true
     fi
     log "benchmark 结束: custom=$CUSTOM_PASS official=$OFFICIAL_PASS"
+    # 两条基线 bench 之后在同一个 server 进程上做并发扫描：
+    # 同进程是刻意的——B300 报告的 40K/30K 与扫描来自两个不同版本的 server，
+    # 导致两组数字不能相互印证，这里不重复那个错误。
+    run_sweep
     docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
 
 # =============================================================================
 # 运行元数据：写在结果目录里，FEAT-003 的收集器据此拼出 compare-results.sh 的 schema
 # =============================================================================
+# 把 SWEEP_DONE/SWEEP_FAILED 的 "并发:prompts:文件名" 记账渲染成 JSON 对象数组。
+# 顺序即执行顺序，便于对着 bootstrap.log 复盘。
+sweep_levels_json() {
+    local entry conc prompts fname status first=1
+    printf '['
+    for entry in "${SWEEP_DONE[@]+"${SWEEP_DONE[@]}"}"; do
+        conc="${entry%%:*}"; prompts="$(printf '%s' "$entry" | cut -d: -f2)"
+        fname="${entry##*:}"; status=true
+        (( first )) || printf ','
+        first=0
+        printf '\n      {"max_concurrency": %s, "num_prompts": %s, "file": "%s", "pass": %s}' \
+            "$conc" "$prompts" "$(json_escape "$fname")" "$status"
+    done
+    for entry in "${SWEEP_FAILED[@]+"${SWEEP_FAILED[@]}"}"; do
+        conc="${entry%%:*}"; prompts="$(printf '%s' "$entry" | cut -d: -f2)"
+        fname="${entry##*:}"; status=false
+        (( first )) || printf ','
+        first=0
+        printf '\n      {"max_concurrency": %s, "num_prompts": %s, "file": "%s", "pass": %s}' \
+            "$conc" "$prompts" "$(json_escape "$fname")" "$status"
+    done
+    (( first )) || printf '\n    '
+    printf ']'
+}
+
 write_run_metadata() {
     local meta="$RESULTS_DIR/run_${RUN_ID}.json"
     mkdir -p "$RESULTS_DIR"
@@ -1104,6 +1209,14 @@ write_run_metadata() {
     "official_output_tokens": $OFFICIAL_OUTPUT_TOKENS,
     "num_prompts": $NUM_PROMPTS,
     "max_concurrency": $MAX_CONCURRENCY
+  },
+  "concurrency_sweep": {
+    "enabled": $([[ -n "$SWEEP_SPEC" ]] && echo true || echo false),
+    "spec": "$(json_escape "$SWEEP_SPEC")",
+    "input_tokens": $SWEEP_INPUT_TOKENS,
+    "output_tokens": $SWEEP_OUTPUT_TOKENS,
+    "default_num_prompts": $SWEEP_NUM_PROMPTS,
+    "levels": $(sweep_levels_json)
   },
   "elapsed_seconds": $(( $(date +%s) - START_EPOCH ))
 }

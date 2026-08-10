@@ -1157,6 +1157,98 @@ assert_count "$STUB_LOG" "bench_serving" 0 "收到通知后不再开新的 bench
 end_case
 
 # =============================================================================
+# 用例 28) 并发扫描：SWEEP_SPEC 逐档执行、文件命名正确、每档单独落 S3
+# 守的契约：
+#   1) 6 个默认档位落 bench_c<N>.json（与 B300 报告同名，否则没法对照）
+#   2) 覆盖了 prompts 的档位落 bench_c<N>_p<P>.json，不会覆盖掉同并发的默认档
+#   3) 8000/1500 的负载参数逐字正确
+#   4) 扫描发生在两条基线 bench 之后、同一个 server 进程上（不重启容器）
+#   5) 每一档跑完立刻 sync，不攒批（spot 被回收时已完成的档位不能丢）
+# =============================================================================
+begin_case 28 "并发扫描逐档执行、命名正确、同进程、逐档落 S3"
+BIN="$(make_case_bin)"
+run_bootstrap "$BIN" \
+    STUB_LSBLK="$DISKS_4" \
+    STUB_DF_AVAIL_KB=30000000000 \
+    STUB_GPU_COUNT=8 STUB_HEALTH_OK=1 \
+    CHECKPOINT_GB=160 STORAGE_MARGIN_GB=80 \
+    CHECKPOINT_S3_URI="$TEST_CKPT_URI" \
+    FETCH_CHECKPOINT=true RUN_SERVER=true \
+    TP_SIZE=4 \
+    SWEEP_SPEC='1 2 4 8 16 32 16:128 32:128' \
+    SWEEP_INPUT_TOKENS=8000 SWEEP_OUTPUT_TOKENS=1500 SWEEP_NUM_PROMPTS=32 \
+    MAX_RUNTIME_MINUTES=5 STREAM_INTERVAL_SECONDS=60 GPU_SAMPLE_INTERVAL_SECONDS=60
+assert_exit 0 "$LAST_EXIT" "带并发扫描的完整流程正常结束"
+assert_phase completed
+for c in 1 2 4 8 16 32; do
+    assert_file_contains "$STUB_LOG" \
+        "bench_serving --backend sglang --dataset-name random --random-input 8000 --random-output 1500 --num-prompts 32 --max-concurrency $c" \
+        "扫描档位 c=$c 的负载参数与 B300 逐字一致"
+    assert_file_exists "$NVME_MOUNT/results/bench_c$c.json" "档位 c=$c 落到 bench_c$c.json"
+done
+assert_file_contains "$STUB_LOG" \
+    "--random-input 8000 --random-output 1500 --num-prompts 128 --max-concurrency 16" \
+    "加样本档 c=16 用 128 条 prompts"
+assert_file_contains "$STUB_LOG" \
+    "--random-input 8000 --random-output 1500 --num-prompts 128 --max-concurrency 32" \
+    "加样本档 c=32 用 128 条 prompts"
+assert_file_exists "$NVME_MOUNT/results/bench_c16_p128.json" "加样本档另存 bench_c16_p128.json，不覆盖默认档"
+assert_file_exists "$NVME_MOUNT/results/bench_c32_p128.json" "加样本档另存 bench_c32_p128.json，不覆盖默认档"
+# 扫描必须在两条基线 bench 之后，且全程只起过一次容器
+assert_count "$STUB_LOG" "docker run -d --name sglang-server" 1 \
+    "扫描与基线 bench 共用同一个 server 进程，只 docker run 一次"
+assert_file_contains "$NVME_MOUNT/results/run_$RUN_ID.json" '"enabled": true' "元数据里标记扫描已启用"
+assert_file_contains "$NVME_MOUNT/results/run_$RUN_ID.json" '"max_concurrency": 32, "num_prompts": 128' \
+    "元数据逐档记账，含加样本档"
+# 8 档扫描 -> 至少 8 次结果同步（再加基线阶段的若干次）
+assert_min_count "$STUB_LOG" "s3 sync $NVME_MOUNT/results/" 8 \
+    "每档跑完立刻单独同步结果，不攒到最后"
+end_case
+
+# =============================================================================
+# 用例 29) SWEEP_SPEC 为空时行为与改动前完全一致（不跑任何扫描）
+# 这是「新功能默认不改变既有行为」的回归护栏
+# =============================================================================
+begin_case 29 "SWEEP_SPEC 留空则完全不跑扫描"
+BIN="$(make_case_bin)"
+run_bootstrap "$BIN" \
+    STUB_LSBLK="$DISKS_4" \
+    STUB_DF_AVAIL_KB=30000000000 \
+    STUB_GPU_COUNT=8 STUB_HEALTH_OK=1 \
+    CHECKPOINT_GB=160 STORAGE_MARGIN_GB=80 \
+    CHECKPOINT_S3_URI="$TEST_CKPT_URI" \
+    FETCH_CHECKPOINT=true RUN_SERVER=true TP_SIZE=4 \
+    MAX_RUNTIME_MINUTES=5 STREAM_INTERVAL_SECONDS=60 GPU_SAMPLE_INTERVAL_SECONDS=60
+assert_exit 0 "$LAST_EXIT" "不带扫描时流程照旧结束"
+assert_count "$STUB_LOG" "bench_serving" 2 "只跑 README 6.1 的两条 bench，一条不多"
+assert_file_not_contains "$STUB_LOG" "--random-input 8000" "没有发起任何 8K 扫描负载"
+assert_file_contains "$NVME_MOUNT/results/run_$RUN_ID.json" '"enabled": false' "元数据里标记扫描未启用"
+assert_file_contains "$NVME_MOUNT/results/run_$RUN_ID.json" '"levels": []' "档位列表为空数组，不是 null"
+end_case
+
+# =============================================================================
+# 用例 30) 非法 SWEEP_SPEC token 被跳过，合法档位照跑
+# 一个手滑的 token 不该让整轮 GPU 时间报废
+# =============================================================================
+begin_case 30 "非法 SWEEP_SPEC token 只跳过自己，不影响其他档位"
+BIN="$(make_case_bin)"
+run_bootstrap "$BIN" \
+    STUB_LSBLK="$DISKS_4" \
+    STUB_DF_AVAIL_KB=30000000000 \
+    STUB_GPU_COUNT=8 STUB_HEALTH_OK=1 \
+    CHECKPOINT_GB=160 STORAGE_MARGIN_GB=80 \
+    CHECKPOINT_S3_URI="$TEST_CKPT_URI" \
+    FETCH_CHECKPOINT=true RUN_SERVER=true TP_SIZE=4 \
+    SWEEP_SPEC='1 abc 0 4:xyz 8' SWEEP_NUM_PROMPTS=32 \
+    MAX_RUNTIME_MINUTES=5 STREAM_INTERVAL_SECONDS=60 GPU_SAMPLE_INTERVAL_SECONDS=60
+assert_exit 0 "$LAST_EXIT" "含非法 token 也能正常收尾"
+assert_file_exists "$NVME_MOUNT/results/bench_c1.json" "合法档位 c=1 照跑"
+assert_file_exists "$NVME_MOUNT/results/bench_c8.json" "合法档位 c=8 照跑"
+assert_file_contains "$LOG_DIR/bootstrap.log" "SWEEP_SPEC token 非法" "非法 token 有明确告警"
+assert_count "$STUB_LOG" "--random-input 8000" 2 "只跑了 2 个合法档位，非法的没发起请求"
+end_case
+
+# =============================================================================
 # 汇总
 # =============================================================================
 echo ""

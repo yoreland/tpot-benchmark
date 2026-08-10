@@ -343,6 +343,43 @@ recipe，以及 FEAT-004 加的 `gpu_family` / `gpu_success` / `final_phase` /
 改成新权重的实际体积（`bash scripts/mirror-checkpoint.sh --model <repo>` 会打印
 精确字节数），否则磁盘护栏挡的就是错的数。
 
+### 5.1 顺带跑并发扫描（`SWEEP_SPEC`）
+
+`SWEEP_SPEC` 留空时行为与以前完全一致（只跑 README 6.1 的两条 bench）。
+填上之后，会在**同一个 server 进程**上、两条基线 bench 之后按档位追加扫描——
+同进程是刻意的：B300 报告的 40K/30K 与扫描来自两个不同版本的 server，
+导致两组数字无法相互印证，别再重复那个错误。
+
+```bash
+# 现成的 H200 并发扫描 recipe（镜像钉 v0.5.17，8 档，80 分钟硬上限）
+CONFIRM_SPEND=yes bash scripts/launch-bench-ec2.sh --stage full \
+    --region us-east-2 --az us-east-2a --instance-type p5en.48xlarge \
+    --max-runtime-minutes 80 \
+    --recipe scripts/recipes/h200-tp4-fp4-eagle-sweep.env \
+    --bucket tpot-bench-results-077090643075-us-east-2
+```
+
+| 变量 | 默认 | 含义 |
+|------|------|------|
+| `SWEEP_SPEC` | 空（不跑） | 空格分隔的 `并发[:prompts]`，如 `1 2 4 8 16 32 32:128` |
+| `SWEEP_INPUT_TOKENS` | 8000 | 扫描负载输入长度（B300 报告的口径，换了就没法对比） |
+| `SWEEP_OUTPUT_TOKENS` | 1500 | 扫描负载输出长度 |
+| `SWEEP_NUM_PROMPTS` | 32 | 不带 `:prompts` 的档位用这个样本量 |
+
+输出命名规则：用默认样本量的档位落 `bench_c<N>.json`（与 B300 报告同名，便于对照），
+覆盖了样本量的落 `bench_c<N>_p<P>.json`。每档跑完**立刻单独** sync 一次 S3，
+不攒批——spot 随时可能被回收，已完成的档位不能丢。单档失败只记账不中断后续档位
+（高并发档 OOM 是预期可能结果，不该让排好队的其他档位一起报废）。
+逐档记账写在 `run_<RUN_ID>.json` 的 `concurrency_sweep.levels` 里。
+
+⚠️ 两个坑：
+1. **`--max-runtime-minutes` 要显式传。** recipe 里的 `MAX_RUNTIME_MINUTES` 只覆盖
+   实例内的看门狗，launcher 自己的花费预估仍用 stage 默认值（full = 240 分钟），
+   不传的话你看到的「最坏花费」是虚高的。
+2. **样本量别照抄 32。** 32 条 prompts 在 c=32 时一波就发完，根本没进稳态：
+   实测 H200 c=32 从 32 条加到 128 条，TPOT P50 涨 65%、E2E P50 涨 60%
+   （详见 H200 报告 5.4）。要拿去签 SLA 的数字必须用大样本量那一档。
+
 ---
 
 ## 6. 放弃一次运行时怎么收摊
