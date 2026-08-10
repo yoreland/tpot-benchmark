@@ -34,6 +34,7 @@ bash scripts/run-staged.sh --show-ledger   # 看哪一级已经过了、上次�
 | 日期 | 硬件 | 配置 | TPOT P50 | Output tok/s | 结果 | 报告 |
 |------|------|------|----------|-------------|------|------|
 | 2026-08-09 | H200 x4 (p5en.48xlarge) | tp=4, EAGLE 3/1/4, Marlin | 3.330 ms | 224.2 (custom) / 282.5 (official) | **PASS** | [reports/h200-tp4-eagle-20260809](reports/h200-tp4-eagle-20260809/) |
+| 2026-08-09 | B300 x8 (p6-b300.48xlarge) | tp=8, EAGLE 3/1/4, megamoe | 3.337 ms | 191.5 (custom) / 281.7 (official) | **PASS** | [reports/b300-tp8-eagle-20260809](reports/b300-tp8-eagle-20260809/) |
 
 ---
 

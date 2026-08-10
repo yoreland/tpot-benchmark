@@ -1,0 +1,22 @@
+{
+  "project_type": "GPU benchmark harness with EC2 Spot infrastructure (bash + Python)",
+  "language": "Bash (existing), Python (Lambda function)",
+  "build_system": "No formal build system; bash scripts with AWS CLI for deployment",
+  "test_framework": "bash -n syntax validation for shell scripts; Python: standard unittest/pytest for Lambda",
+  "build_command": "bash -n infra/lambda/capacity_poller/handler.py is not applicable; python3 -c 'import ast; ast.parse(open(\"infra/lambda/capacity_poller/handler.py\").read())' for syntax check",
+  "test_command": "python3 -c 'import ast; ast.parse(open(\"infra/lambda/capacity_poller/handler.py\").read())'",
+  "verification_instructions": "1. Validate Python syntax of Lambda handler. 2. Run deploy script. 3. Verify Lambda exists and is scheduled. 4. Do a test invocation.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "AWS CLI is already authenticated (account 077090643075, us-east-1). Python 3 available on host.",
+  "environment_constraints": "OPEN_INTERNET network mode. AWS CLI authenticated. No Docker needed for Lambda (zip deployment). User wants instances NOT to self-terminate (SELF_TERMINATE=false) so they can SSH in if problems arise. Logs must be preserved for sandbox monitoring.",
+  "contribution_requirements": "Branch: harden-ec2-bench-runner. Commit and push when done.",
+  "key_patterns": "1. launch-bench-ec2.sh renders env prelude + bootstrap into user-data, uploads to S3 if >16KB. 2. AMI resolved via SSM param /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id. 3. Instance profile: tpot-bench-ec2-profile. 4. Subnet mapping is per-AZ (verified). 5. Security group: tpot-bench-noingress-sg (fallback to default). 6. Recipe files are bash exports appended to user-data prelude. 7. Spot options: one-time, terminate on interruption. 8. S3 bucket pattern: tpot-bench-results-077090643075-{region}. 9. Block device: 200GB gp3 root. 10. Tags: Project=tpot-benchmark, Name=tpot-bench-{type}.",
+  "relevant_files": [
+    "scripts/poll-b300-h200.sh",
+    "scripts/launch-bench-ec2.sh",
+    "scripts/bootstrap/bench-bootstrap.sh",
+    "scripts/recipes/h200-tp4-fp4-eagle.env",
+    "scripts/recipes/b300-tp2-dp2-fp4-megamoe.env"
+  ],
+  "directory_structure": "/ - root: README.md, docs/, reports/, results/, scripts/, tests/. scripts/ contains: bootstrap/bench-bootstrap.sh, launch-bench-ec2.sh, poll-b300-h200.sh, recipes/. infra/ will be created for Lambda deployment."
+}

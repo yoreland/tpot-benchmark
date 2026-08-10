@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Run the two P2 exploratory configs on the live B300 box, strictly timeboxed: c4-tp8-eagle-triton (tp=8 + EAGLE with the triton MoE runner instead of megamoe, to compare MoE backends on Blackwell) and c5-4x-tp2-router (four INDEPENDENT tp=2 engine processes plus a router, reproducing the real awslabs dsv4flash-b300-intra-3p1d topology). Both are allowed to fail: a clean, well-documented failure with the exact error is a legitimate result here and is far cheaper than an open-ended debugging session at $50/hr. Independent of each other; c4 first because it is the cheaper experiment.",
+  "status": "pending",
+  "steps": [
+    "Add config c4-tp8-eagle-triton: identical to c1-tp8-eagle-megamoe but replace --moe-a2a-backend megamoe with --moe-runner-backend triton, keep everything else including EAGLE 3/1/4 and the jitcache mount. Be aware this may hit the same 'AssertionError: Hidden size mismatch' in fused_moe_triton/.../fused_moe.py that killed all four B200 attempts during CUDA graph capture; if it does, that is the answer to the megamoe-vs-triton question on Blackwell. Capture the assertion text and traceback file path into matrix-status.json failure_reason and stop - do not attempt padding workarounds.",
+    "Run c4 with a reduced readiness timeout (--timeout-sec 1500 is enough now that the JIT cache is warm) so a hang cannot silently burn 40 minutes.",
+    "Add config c5-4x-tp2-router. This must use FOUR INDEPENDENT engine processes each at tp=2, not one process with --dp 4: one unified process with --enable-dp-attention --dp N is already proven to die with 'AssertionError: short-circuiting allreduce will lead to hangs', and SGLang asserts tp_size % dp_size == 0. Implement it as four containers (or four detached processes in one container) pinned with CUDA_VISIBLE_DEVICES=0,1 / 2,3 / 4,5 / 6,7 on ports 30001-30004, each with --tp 2 --moe-a2a-backend megamoe --trust-remote-code --mem-fraction-static 0.85 --cuda-graph-max-bs 64 --enable-metrics and the EAGLE 3/1/4 flags, then front them with the SGLang router (python3 -m sglang_router.launch_router --worker-urls http://127.0.0.1:30001 ... --port 30000) so the benchmark command's endpoint stays unchanged.",
+    "Before spending time on c5, check what the installed image actually supports by running one short SSM command: docker run --rm --entrypoint python3 lmsysorg/sglang:v0.5.12.post1-cu130 -c 'import importlib;print(bool(importlib.util.find_spec(\"sglang_router\")))' and also inspect python3 -m sglang.launch_server --help for the disaggregation flags. If sglang_router is absent from the image and installing it would need a pip install inside the container, decide in one step: a single pip install attempt is acceptable, an open-ended dependency hunt is not. If the router path is unavailable, fall back to benchmarking ONE of the four tp=2 engines directly on its own port and label the result honestly as 'single tp=2 engine, no router' in matrix-status.json and the report.",
+    "Timebox c5 to 45 minutes of wall clock from first launch attempt. If it is not serving benchmarks by then, mark it failed (or partially completed if the single-engine fallback produced numbers), record exactly what was tried and what the error was, and stop. Record the elapsed time in matrix-status.json.",
+    "Note in matrix-status.json and later in the report the interpretive caveat for c5: at --max-concurrency 1 a data-parallel router sends every request to a single worker, so c5's TPOT is really a tp=2 single-engine measurement and its value is the TTFT/topology comparison, not throughput scaling.",
+    "For every config in this feature, upload artifacts (including server logs of failed launches) to s3://tpot-bench-results-077090643075-us-west-2/runs/b300-matrix-20260809/<config>/ immediately and pull them into results/b300-matrix-20260809/<config>/.",
+    "Add stub-based test cases in tests/run-tests.sh for the new config names: --dry-run --config c4-tp8-eagle-triton logs a docker run containing --moe-runner-backend triton and NOT --moe-a2a-backend megamoe; --dry-run --config c5-4x-tp2-router logs four launches with distinct CUDA_VISIBLE_DEVICES pairs and ports 30001-30004 plus a router on 30000, and contains no --dp flag anywhere.",
+    "Commit to harden-ec2-bench-runner. Do not push."
+  ],
+  "acceptance_criteria": [
+    "matrix-status.json has a terminal status (completed or failed, with a concrete failure_reason quoting the real error) for both c4-tp8-eagle-triton and c5-4x-tp2-router",
+    "Any server log from a failed launch is preserved in S3 and in results/b300-matrix-20260809/<config>/",
+    "The c5 implementation uses four independent tp=2 processes and contains no --dp / --enable-dp-attention flag anywhere",
+    "c5 elapsed time is recorded and did not exceed the 45-minute timebox",
+    "tests/run-tests.sh passes, including new c4/c5 dry-run cases, with at least 22 cases and at least 220 assertions"
+  ],
+  "verification": [
+    "bash -n scripts/b300-run-config.sh",
+    "tests/run-tests.sh",
+    "grep -c 'enable-dp-attention' scripts/b300-run-config.sh returns 0 for the c5 launch path (a commented explanation of why it is absent is fine)",
+    "aws s3 ls s3://tpot-bench-results-077090643075-us-west-2/runs/b300-matrix-20260809/ --recursive --region us-west-2 lists c4 and c5 artifacts"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

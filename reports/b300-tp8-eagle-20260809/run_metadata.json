@@ -1,0 +1,24 @@
+{
+  "run_id": "b300-tp8-eagle-20260809",
+  "stage": "full",
+  "region": "us-west-2",
+  "instance_id": "i-0d2500b8c91851a30",
+  "instance_type": "p6-b300.48xlarge",
+  "model": "deepseek-ai/DeepSeek-V4-Flash",
+  "sglang_image": "lmsysorg/sglang:v0.5.12.post1-cu130",
+  "tp_size": 8,
+  "serve_args": "--model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash --tp 8 --moe-a2a-backend megamoe --mem-fraction-static 0.85 --trust-remote-code --host 0.0.0.0 --port 30000 --cuda-graph-max-bs 64 --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --enable-metrics",
+  "custom_benchmark_file": "bench_custom.json",
+  "official_benchmark_file": "bench_official.json",
+  "custom_pass": true,
+  "official_pass": true,
+  "config": {
+    "input_tokens": 40000,
+    "output_tokens": 1500,
+    "official_input_tokens": 30000,
+    "official_output_tokens": 4096,
+    "num_prompts": 50,
+    "max_concurrency": 1
+  },
+  "elapsed_seconds": 3360
+}

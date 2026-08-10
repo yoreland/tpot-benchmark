@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create Lambda function code, deployment script, and teardown script for persistent B300/H200 spot capacity polling via EventBridge + SNS",
+  "status": "completed",
+  "steps": [
+    "Create directory infra/lambda/capacity_poller/",
+    "Create infra/lambda/capacity_poller/handler.py - Python 3.12 Lambda function that: (a) For each target (p5en.48xlarge and p6-b300.48xlarge) across all configured AZs, attempts a probe run_instances call. (b) If probe succeeds: terminates the probe instance immediately, reads the recipe file content (embedded in the Lambda code as constants since Lambda can't read local files at runtime), renders the env prelude + bootstrap script (same logic as launch-bench-ec2.sh), uploads bootstrap to S3, launches the real benchmark instance with user-data stub that fetches from S3. (c) Publishes SNS notification with instance type, region, AZ, run_id, estimated cost. (d) Disables the EventBridge rule for the successfully-launched instance type. (e) If both types launched, disables all rules. (f) SELF_TERMINATE must be set to 'false' so instances stay alive for debugging. (g) Handles InsufficientInstanceCapacity gracefully (just log and continue).",
+    "The Lambda handler must embed: subnet mapping (all 8 AZs), recipe content for both h200 and b300, the full bench-bootstrap.sh content (read at deploy time and embedded as a constant or loaded from a co-packaged file in the zip), security group lookup logic, AMI resolution via SSM.",
+    "Create infra/lambda/capacity_poller/bootstrap_embed.py - a helper that packages bench-bootstrap.sh content as a Python constant, OR just include bench-bootstrap.sh in the Lambda zip and read it at runtime.",
+    "Create infra/deploy-poller.sh that: (a) Creates SNS topic 'tpot-bench-capacity-alerts'. (b) Creates IAM role 'tpot-bench-poller-lambda-role' with permissions for ec2:RunInstances, ec2:TerminateInstances, ec2:DescribeSecurityGroups, ec2:DescribeInstances, ssm:GetParameter, s3:PutObject, sns:Publish, events:DisableRule, events:DescribeRule, iam:PassRole, logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents. (c) Packages Lambda code into zip (handler.py + bench-bootstrap.sh + recipe files). (d) Creates Lambda function 'tpot-bench-capacity-poller' with 60s timeout, 256MB memory, Python 3.12 runtime. (e) Creates EventBridge rule 'tpot-bench-poll-capacity' with rate(3 minutes). (f) Adds Lambda permission for EventBridge to invoke it. (g) Adds EventBridge target pointing to the Lambda.",
+    "Create infra/teardown-poller.sh that removes: EventBridge rule + targets, Lambda function, IAM role + policies, SNS topic. Idempotent (handles 'not found' gracefully).",
+    "Include the recipe file contents and bootstrap script in the Lambda package by copying them into the zip at deploy time. The Lambda reads them from its local filesystem (co-packaged files).",
+    "Key detail for user-data rendering in Lambda: replicate the S3-stub pattern from launch-bench-ec2.sh. Upload the full rendered bootstrap (env prelude + recipe + bench-bootstrap.sh) to s3://{bucket}/bootstrap/{run_id}/bench-bootstrap.sh, then user-data is just a small stub that downloads and execs it.",
+    "Instance launch parameters: 200GB gp3 root, IMDSv2 required, instance-initiated-shutdown-behavior=terminate, spot one-time with terminate on interruption, tags Project=tpot-benchmark + Name=tpot-bench-{type} + RunId={run_id}.",
+    "CRITICAL USER REQUIREMENT: Set SELF_TERMINATE='false' in the env prelude so instances do NOT auto-terminate. The user wants to SSH/SSM in to debug if there are problems. Logs are preserved on instance and streamed to S3."
+  ],
+  "acceptance_criteria": [
+    "infra/lambda/capacity_poller/handler.py exists and passes Python syntax validation",
+    "infra/deploy-poller.sh exists and is executable",
+    "infra/teardown-poller.sh exists and is executable",
+    "Lambda handler correctly implements probe-then-launch logic for both instance types",
+    "SNS notification is published on successful launch",
+    "EventBridge rule is disabled after successful launch for that instance type",
+    "SELF_TERMINATE is set to false in rendered user-data",
+    "Bootstrap script and recipe files are included in Lambda package"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('infra/lambda/capacity_poller/handler.py').read())\" passes",
+    "bash -n infra/deploy-poller.sh passes",
+    "bash -n infra/teardown-poller.sh passes"
+  ],
+  "blocked_reason": null,
+  "findings": "All three files created and verified. Python handler passes AST validation, both shell scripts pass bash -n. SELF_TERMINATE set to false as required. Lambda zip includes co-packaged bench-bootstrap.sh and both recipe files. Deploy script is idempotent (handles existing resources). Teardown uses safe_run pattern for idempotency."
+}
