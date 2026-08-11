@@ -40,8 +40,8 @@ SGLANG_PORT = 30080
 # Timeouts
 SSM_WAIT_TIMEOUT = 120  # seconds to wait for SSM readiness
 SSM_COMMAND_TIMEOUT = 3600  # seconds for the long-running deploy command (1 hour)
-HEALTH_CHECK_TIMEOUT = 180  # seconds to wait for service health after command completes
-HEALTH_CHECK_INTERVAL = 15  # seconds between health checks
+MAX_HEALTH_WAIT = 1200  # seconds max to wait for service health after command completes (20 min)
+HEALTH_CHECK_INTERVAL = 15  # seconds between health checks within a single poll cycle
 
 # Model settings
 MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-ai/DeepSeek-V4-Flash")
@@ -102,7 +102,11 @@ def _get_deploying_bookings() -> list:
 
 
 def _update_booking_status(
-    booking_id: str, status: str, endpoint: str = "", ssm_command_id: str = ""
+    booking_id: str,
+    status: str,
+    endpoint: str = "",
+    ssm_command_id: str = "",
+    command_completed_at: str = "",
 ) -> None:
     """Update booking status in DynamoDB."""
     dynamodb = boto3.resource("dynamodb")
@@ -122,6 +126,10 @@ def _update_booking_status(
     if ssm_command_id:
         update_expr += ", ssmCommandId = :cmd"
         expr_values[":cmd"] = ssm_command_id
+
+    if command_completed_at:
+        update_expr += ", commandCompletedAt = :cca"
+        expr_values[":cca"] = command_completed_at
 
     try:
         table.update_item(
@@ -546,26 +554,58 @@ def _handle_check_progress():
         elif cmd_status == "Success":
             logger.info("Booking %s: command %s succeeded, checking health", booking_id, command_id)
 
-            # Command completed successfully, now check health
+            # Record commandCompletedAt if this is the first time we see Success
+            command_completed_at = booking.get("commandCompletedAt", "")
+            if not command_completed_at:
+                command_completed_at = datetime.now(timezone.utc).isoformat()
+                _update_booking_status(
+                    booking_id, "deploying", command_completed_at=command_completed_at
+                )
+                logger.info(
+                    "Booking %s: first time seeing command complete, recorded commandCompletedAt=%s",
+                    booking_id,
+                    command_completed_at,
+                )
+
+            # Attempt a single short health check (up to 30 seconds)
             healthy = False
             start = time.time()
-            while time.time() - start < HEALTH_CHECK_TIMEOUT:
+            while time.time() - start < 30:
                 if _check_health(ssm_client, instance_id):
                     healthy = True
                     break
                 time.sleep(HEALTH_CHECK_INTERVAL)
 
             if not healthy:
-                logger.error("Health check failed for booking %s after command success", booking_id)
-                _update_booking_status(booking_id, "failed")
-                _send_notification(
-                    f"Deployment failed: {deployment_plan}",
-                    f"Service on {instance_id} did not become healthy after successful deployment",
-                    booking,
-                    event_type="health_check_timeout",
-                )
-                results.append({"bookingId": booking_id, "result": "failed_health"})
-                continue
+                # Calculate elapsed time since command completed
+                completed_time = datetime.fromisoformat(command_completed_at)
+                elapsed = (datetime.now(timezone.utc) - completed_time).total_seconds()
+
+                if elapsed < MAX_HEALTH_WAIT:
+                    logger.info(
+                        "Booking %s: health not ready yet, elapsed %.0fs, will retry on next poll",
+                        booking_id,
+                        elapsed,
+                    )
+                    results.append({"bookingId": booking_id, "result": "waiting_health"})
+                    continue
+                else:
+                    # Exceeded MAX_HEALTH_WAIT - truly failed
+                    logger.error(
+                        "Booking %s: health check failed after %.0fs (max %ds), marking failed",
+                        booking_id,
+                        elapsed,
+                        MAX_HEALTH_WAIT,
+                    )
+                    _update_booking_status(booking_id, "failed")
+                    _send_notification(
+                        f"Deployment failed: {deployment_plan}",
+                        f"Service on {instance_id} did not become healthy after {int(elapsed)}s (max {MAX_HEALTH_WAIT}s)",
+                        booking,
+                        event_type="health_check_timeout",
+                    )
+                    results.append({"bookingId": booking_id, "result": "failed_health"})
+                    continue
 
             # Service is healthy - get endpoint
             public_ip = _get_public_ip(ec2_client, instance_id)
