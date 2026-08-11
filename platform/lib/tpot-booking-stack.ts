@@ -429,6 +429,16 @@ def generate_policy(principal_id, effect, resource):
       targets: [new targets.LambdaFunction(capacityPoller)],
     });
 
+    // Schedule rule to trigger deployer check_progress every 2 minutes
+    new events.Rule(this, 'DeployerCheckProgressSchedule', {
+      ruleName: 'tpot-booking-deployer-check-progress',
+      description: 'Trigger deployer Lambda every 2 minutes to check deployment progress',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(2)),
+      targets: [new targets.LambdaFunction(deployer, {
+        event: events.RuleTargetInput.fromObject({ action: 'check_progress' }),
+      })],
+    });
+
     // ─── EC2 Instance Profile for SSM ──────────────────────────────────
 
     const ec2Role = new iam.Role(this, 'TpotBenchEc2Role', {

@@ -36,6 +36,7 @@ class Booking:
     instanceId: str = ""
     region: str = ""
     az: str = ""
+    ssmCommandId: str = ""
     confirmOverride: bool = False
 
     def to_dict(self) -> dict:

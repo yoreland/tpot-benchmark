@@ -1,12 +1,20 @@
 """
-T-POT Booking Platform - Deployer Lambda Handler.
+T-POT Booking Platform - Deployer Lambda Handler (Two-Phase Async).
 
-Invoked asynchronously by the capacity poller after a spot instance is launched.
-When a tpot-benchmark instance reaches 'running' state:
+Phase 1 (deploy): Invoked by the capacity poller after a spot instance is launched.
   1. Waits for instance to be reachable via SSM
-  2. Writes compose file to instance and runs docker-compose via SSM RunCommand
-  3. Monitors health endpoint on port 30080
-  4. Updates booking status and sends notifications
+  2. Sends a long-running SSM command (timeout 3600s) that performs:
+     NVMe RAID setup, model download, docker compose pull + up
+  3. Stores the SSM command_id in the booking record
+  4. Updates booking status to 'deploying'
+  5. Returns immediately (does NOT wait for command completion)
+
+Phase 2 (check_progress): Invoked every 2 minutes by EventBridge schedule.
+  - Scans all bookings with status=deploying
+  - For each, checks SSM command status via get_command_invocation
+  - If command succeeded: checks health endpoint, updates to ready + notifies
+  - If command failed: updates to failed + notifies
+  - If command still in progress: skips, waits for next invocation
 """
 
 import json
@@ -29,12 +37,16 @@ NOTIFICATION_TOPIC_ARN = os.environ.get("NOTIFICATION_TOPIC_ARN", "")
 PROJECT_TAG = "tpot-benchmark"
 SGLANG_PORT = 30080
 
-# Timeouts - must fit within Lambda's 10-minute (600s) timeout.
-# Budget: SSM wait (120s) + deploy command (240s) + health check (180s) = 540s max
+# Timeouts
 SSM_WAIT_TIMEOUT = 120  # seconds to wait for SSM readiness
-HEALTH_CHECK_TIMEOUT = 180  # seconds to wait for service health
+SSM_COMMAND_TIMEOUT = 3600  # seconds for the long-running deploy command (1 hour)
+HEALTH_CHECK_TIMEOUT = 180  # seconds to wait for service health after command completes
 HEALTH_CHECK_INTERVAL = 15  # seconds between health checks
-DEPLOY_COMMAND_TIMEOUT = 240  # seconds for docker-compose deployment command
+
+# S3 model mirror settings
+ACCOUNT_ID = "077090643075"
+MODEL_S3_PREFIX = "checkpoints/deepseek-ai__DeepSeek-V4-Flash"
+MODEL_LOCAL_PATH = "/opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash"
 
 # Path to bundled compose files (packaged with the Lambda)
 COMPOSE_FILES_DIR = Path(__file__).parent / "compose-files"
@@ -75,8 +87,23 @@ def _get_booking_by_instance(instance_id: str) -> dict:
     return {}
 
 
+def _get_deploying_bookings() -> list:
+    """Get all bookings with status=deploying."""
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table(BOOKING_TABLE)
+
+    try:
+        resp = table.scan(
+            FilterExpression=boto3.dynamodb.conditions.Attr("status").eq("deploying")
+        )
+        return resp.get("Items", [])
+    except ClientError as e:
+        logger.error("Failed to scan deploying bookings: %s", e)
+    return []
+
+
 def _update_booking_status(
-    booking_id: str, status: str, endpoint: str = ""
+    booking_id: str, status: str, endpoint: str = "", ssm_command_id: str = ""
 ) -> None:
     """Update booking status in DynamoDB."""
     dynamodb = boto3.resource("dynamodb")
@@ -92,6 +119,10 @@ def _update_booking_status(
     if endpoint:
         update_expr += ", endpoint = :e"
         expr_values[":e"] = endpoint
+
+    if ssm_command_id:
+        update_expr += ", ssmCommandId = :cmd"
+        expr_values[":cmd"] = ssm_command_id
 
     try:
         table.update_item(
@@ -155,12 +186,12 @@ def _wait_for_ssm(ssm_client, instance_id: str, timeout: int = SSM_WAIT_TIMEOUT)
     return False
 
 
-def _run_command(
-    ssm_client, instance_id: str, commands: list, timeout: int = 600
-) -> dict:
-    """Execute commands on instance via SSM RunCommand.
+def _send_deploy_command(
+    ssm_client, instance_id: str, commands: list, timeout: int = SSM_COMMAND_TIMEOUT
+) -> str:
+    """Send a long-running SSM command and return the command_id immediately.
 
-    Returns dict with 'success' bool, 'output' string, and 'error' string.
+    Does NOT wait for command completion. Returns empty string on failure.
     """
     try:
         resp = ssm_client.send_command(
@@ -170,39 +201,43 @@ def _run_command(
             TimeoutSeconds=timeout,
         )
         command_id = resp["Command"]["CommandId"]
-        logger.info("Sent SSM command %s to %s", command_id, instance_id)
-
-        # Wait for command completion
-        waiter_start = time.time()
-        while time.time() - waiter_start < timeout:
-            time.sleep(10)
-            try:
-                result = ssm_client.get_command_invocation(
-                    CommandId=command_id,
-                    InstanceId=instance_id,
-                )
-                status = result.get("Status", "")
-                if status in ("Success",):
-                    return {
-                        "success": True,
-                        "output": result.get("StandardOutputContent", ""),
-                        "error": "",
-                    }
-                elif status in ("Failed", "Cancelled", "TimedOut"):
-                    return {
-                        "success": False,
-                        "output": result.get("StandardOutputContent", ""),
-                        "error": result.get("StandardErrorContent", ""),
-                    }
-            except ClientError as e:
-                if "InvocationDoesNotExist" in str(e):
-                    continue
-                logger.warning("Error checking command status: %s", e)
-
-        return {"success": False, "output": "", "error": "Command timed out"}
+        logger.info("Sent SSM command %s to %s (timeout=%ds)", command_id, instance_id, timeout)
+        return command_id
     except ClientError as e:
         logger.error("Failed to send SSM command: %s", e)
-        return {"success": False, "output": "", "error": str(e)}
+        return ""
+
+
+def _check_command_status(ssm_client, command_id: str, instance_id: str) -> str:
+    """Check the status of an SSM command invocation.
+
+    Returns one of: 'Success', 'Failed', 'InProgress', 'Error'
+    """
+    try:
+        result = ssm_client.get_command_invocation(
+            CommandId=command_id,
+            InstanceId=instance_id,
+        )
+        status = result.get("Status", "")
+        if status == "Success":
+            return "Success"
+        elif status in ("Failed", "Cancelled", "TimedOut"):
+            logger.error(
+                "SSM command %s failed with status %s: %s",
+                command_id, status, result.get("StandardErrorContent", "")[:500]
+            )
+            return "Failed"
+        elif status in ("InProgress", "Pending", "Delayed"):
+            return "InProgress"
+        else:
+            logger.warning("Unexpected SSM command status: %s", status)
+            return "InProgress"
+    except ClientError as e:
+        if "InvocationDoesNotExist" in str(e):
+            # Command may not have propagated yet
+            return "InProgress"
+        logger.error("Error checking command %s: %s", command_id, e)
+        return "Error"
 
 
 def _load_compose_content(compose_file: str) -> str:
@@ -214,11 +249,18 @@ def _load_compose_content(compose_file: str) -> str:
     return ""
 
 
-def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
-    """Generate the docker-compose deployment commands.
+def _get_compose_commands(deployment_plan: str, compose_file: str, region: str) -> list:
+    """Generate the full deployment commands including model download.
+
+    The command sequence is:
+      1. NVMe RAID setup
+      2. Model directory creation + S3 sync (159GB weights, ~10-30 min)
+      3. docker compose pull (47GB image, ~5-15 min)
+      4. docker compose up -d
+      5. Done marker
 
     The compose file content is inlined via heredoc so no external S3 bucket
-    is required. A shebang forces bash execution under SSM.
+    is required.
     """
     compose_content = _load_compose_content(compose_file)
     if not compose_content:
@@ -227,6 +269,9 @@ def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
             f"echo 'ERROR: compose file {compose_file} not found in Lambda bundle' >&2",
             "exit 1",
         ]
+
+    s3_bucket = f"tpot-bench-results-{ACCOUNT_ID}-{region}"
+    s3_model_uri = f"s3://{s3_bucket}/{MODEL_S3_PREFIX}/"
 
     commands = [
         "#!/bin/bash",
@@ -240,40 +285,91 @@ def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
         f"cat << 'COMPOSE_EOF' > /opt/tpot-bench/scripts/{compose_file}",
         compose_content,
         "COMPOSE_EOF",
-        # Setup NVMe RAID if available
+        # ─── Step 1: NVMe RAID setup ───────────────────────────────────
+        "echo '=== Step 1: NVMe RAID setup ==='",
         "if [ -b /dev/nvme1n1 ]; then",
         "  echo 'Setting up NVMe RAID...'",
-        "  mdadm --create /dev/md0 --level=0 --raid-devices=$(ls /dev/nvme[1-9]n1 | wc -l) $(ls /dev/nvme[1-9]n1) --force || true",
-        "  mkfs.xfs /dev/md0 || true",
-        "  mkdir -p /mnt/nvme",
-        "  mount /dev/md0 /mnt/nvme || true",
+        "  NVME_DEVICES=$(ls /dev/nvme[1-9]n1 2>/dev/null || true)",
+        "  if [ -n \"$NVME_DEVICES\" ]; then",
+        "    DEVICE_COUNT=$(echo \"$NVME_DEVICES\" | wc -l)",
+        "    mdadm --create /dev/md0 --level=0 --raid-devices=$DEVICE_COUNT $NVME_DEVICES --force || true",
+        "    mkfs.xfs /dev/md0 || true",
+        "    mkdir -p /mnt/nvme",
+        "    mount /dev/md0 /mnt/nvme || true",
+        "    echo 'NVMe RAID mounted at /mnt/nvme'",
+        "  fi",
         "fi",
-        # Pull docker images and start services
-        f"echo 'Deploying with compose file: {compose_file}'",
+        # ─── Step 2: Model directory + S3 sync ─────────────────────────
+        "echo '=== Step 2: Model weight download ==='",
+        "mkdir -p /opt/dlami/nvme/models",
+        "# If NVMe is mounted, use it for model storage and symlink",
+        "if mountpoint -q /mnt/nvme 2>/dev/null; then",
+        "  mkdir -p /mnt/nvme/models",
+        "  rm -rf /opt/dlami/nvme/models",
+        "  ln -sf /mnt/nvme/models /opt/dlami/nvme/models",
+        "  echo 'Using NVMe storage for models via symlink'",
+        "fi",
+        f"echo 'Downloading model weights from S3: {s3_model_uri}'",
+        f"if aws s3 sync {s3_model_uri} {MODEL_LOCAL_PATH}/ --region {region}; then",
+        "  echo 'Model download from S3 completed successfully'",
+        "else",
+        "  echo 'S3 sync failed, falling back to HuggingFace download...'",
+        "  pip install -q huggingface_hub",
+        "  python3 -c \"",
+        "from huggingface_hub import snapshot_download",
+        f"snapshot_download('deepseek-ai/DeepSeek-V4-Flash', local_dir='{MODEL_LOCAL_PATH}')",
+        "\"",
+        "  echo 'Model download from HuggingFace completed'",
+        "fi",
+        # ─── Step 3: Docker compose pull ───────────────────────────────
+        "echo '=== Step 3: Docker compose pull ==='",
         "cd /opt/tpot-bench/scripts",
-        # Stop any existing services
+        "# Stop any existing services",
         "docker compose down --remove-orphans 2>/dev/null || true",
-        # Pull and start
         f"docker compose -f {compose_file} pull",
+        # ─── Step 4: Docker compose up ─────────────────────────────────
+        "echo '=== Step 4: Docker compose up ==='",
         f"docker compose -f {compose_file} up -d",
-        f"echo 'Deployment started for plan: {deployment_plan}'",
+        # ─── Step 5: Done marker ───────────────────────────────────────
+        f"echo '=== Deployment completed for plan: {deployment_plan} ==='",
     ]
     return commands
 
 
 def _check_health(ssm_client, instance_id: str) -> bool:
     """Check if the SGLang service is healthy on port 30080."""
-    result = _run_command(
-        ssm_client,
-        instance_id,
-        [
-            f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{SGLANG_PORT}/health || echo 'fail'"
-        ],
-        timeout=30,
-    )
-    if result["success"]:
-        output = result["output"].strip()
-        return output == "200"
+    try:
+        resp = ssm_client.send_command(
+            InstanceIds=[instance_id],
+            DocumentName="AWS-RunShellScript",
+            Parameters={
+                "commands": [
+                    f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{SGLANG_PORT}/health || echo 'fail'"
+                ]
+            },
+            TimeoutSeconds=30,
+        )
+        command_id = resp["Command"]["CommandId"]
+
+        # Wait for this short command
+        time.sleep(5)
+        for _ in range(5):
+            try:
+                result = ssm_client.get_command_invocation(
+                    CommandId=command_id,
+                    InstanceId=instance_id,
+                )
+                status = result.get("Status", "")
+                if status == "Success":
+                    output = result.get("StandardOutputContent", "").strip()
+                    return output == "200"
+                elif status in ("Failed", "Cancelled", "TimedOut"):
+                    return False
+            except ClientError:
+                pass
+            time.sleep(3)
+    except ClientError as e:
+        logger.debug("Health check command failed: %s", e)
     return False
 
 
@@ -288,11 +384,11 @@ def _get_public_ip(ec2_client, instance_id: str) -> str:
     return ""
 
 
-# ─── Lambda Handler ─────────────────────────────────────────────────────────
+# ─── Phase 1: Deploy ────────────────────────────────────────────────────────
 
 
-def handler(event, context):
-    """Main entry point. Invoked by the capacity poller after instance launch.
+def _handle_deploy(event):
+    """Phase 1: Send long-running SSM deploy command and return immediately.
 
     Expected event format (from poller direct invocation):
     {
@@ -302,12 +398,7 @@ def handler(event, context):
       },
       "booking_id": "booking-xxx"
     }
-
-    Also supports legacy EventBridge format (without booking_id) for
-    backward compatibility.
     """
-    logger.info("Deployer invoked. Event: %s", json.dumps(event, default=str))
-
     # Extract instance ID from event
     detail = event.get("detail", {})
     instance_id = detail.get("instance-id", "")
@@ -336,14 +427,11 @@ def handler(event, context):
     region = booking.get("region", "us-east-1")
 
     logger.info(
-        "Processing deployment for booking %s, instance %s, plan %s",
+        "Phase 1: Starting deployment for booking %s, instance %s, plan %s",
         booking_id,
         instance_id,
         deployment_plan,
     )
-
-    # Update status to deploying
-    _update_booking_status(booking_id, "deploying")
 
     # Determine compose file from deployment plan
     plan_compose_map = {
@@ -357,7 +445,6 @@ def handler(event, context):
     compose_file = plan_compose_map.get(deployment_plan, "docker-compose.yaml")
 
     ssm_client = boto3.client("ssm", region_name=region)
-    ec2_client = boto3.client("ec2", region_name=region)
 
     # Wait for SSM readiness
     if not _wait_for_ssm(ssm_client, instance_id):
@@ -370,71 +457,176 @@ def handler(event, context):
         )
         return {"statusCode": 500, "body": "SSM timeout"}
 
-    # Run deployment commands
-    commands = _get_compose_commands(deployment_plan, compose_file)
-    result = _run_command(ssm_client, instance_id, commands, timeout=DEPLOY_COMMAND_TIMEOUT)
+    # Generate deployment commands (now includes model download)
+    commands = _get_compose_commands(deployment_plan, compose_file, region)
 
-    if not result["success"]:
-        logger.error("Deployment command failed: %s", result["error"])
+    # Send the long-running command (does NOT wait for completion)
+    command_id = _send_deploy_command(ssm_client, instance_id, commands, timeout=SSM_COMMAND_TIMEOUT)
+
+    if not command_id:
         _update_booking_status(booking_id, "failed")
         _send_notification(
             f"Deployment failed: {deployment_plan}",
-            f"Docker compose deployment failed on {instance_id}: {result['error'][:200]}",
+            f"Failed to send SSM deploy command to {instance_id}",
             booking,
-            event_type="docker_compose_failed",
+            event_type="ssm_command_send_failed",
         )
-        return {"statusCode": 500, "body": "Deployment failed"}
+        return {"statusCode": 500, "body": "Failed to send SSM command"}
 
-    # Wait for health check
-    logger.info("Deployment initiated, waiting for health check...")
-    healthy = False
-    start = time.time()
-    while time.time() - start < HEALTH_CHECK_TIMEOUT:
-        time.sleep(HEALTH_CHECK_INTERVAL)
-        if _check_health(ssm_client, instance_id):
-            healthy = True
-            break
+    # Store command_id and update status to deploying
+    _update_booking_status(booking_id, "deploying", ssm_command_id=command_id)
 
-    if not healthy:
-        logger.error("Health check timeout for instance %s", instance_id)
-        _update_booking_status(booking_id, "failed")
-        _send_notification(
-            f"Deployment failed: {deployment_plan}",
-            f"Service on {instance_id} did not become healthy within timeout",
-            booking,
-            event_type="health_check_timeout",
-        )
-        return {"statusCode": 500, "body": "Health check timeout"}
-
-    # Get endpoint
-    public_ip = _get_public_ip(ec2_client, instance_id)
-    endpoint = f"http://{public_ip}:{SGLANG_PORT}/v1" if public_ip else ""
-
-    # Update booking to ready
-    _update_booking_status(booking_id, "ready", endpoint=endpoint)
-
-    # Apply IP whitelist if configured
-    whitelist_ips = booking.get("whitelistIps", [])
-    if whitelist_ips:
-        try:
-            from ec2_manager import update_security_group
-
-            update_security_group(instance_id, region, whitelist_ips)
-        except ImportError:
-            logger.warning("ec2_manager not available in deployer context")
-
-    _send_notification(
-        f"Deployment ready: {deployment_plan}",
-        f"Service is healthy and ready.\nEndpoint: {endpoint}",
-        {**booking, "endpoint": endpoint, "status": "ready"},
-        event_type="deployment_ready",
+    logger.info(
+        "Phase 1 complete: booking %s, command %s sent. Returning immediately.",
+        booking_id,
+        command_id,
     )
 
     return {
         "statusCode": 200,
         "body": json.dumps({
-            "message": "Deployment successful",
+            "message": "Deploy command sent, awaiting completion",
             "bookingId": booking_id,
-            "endpoint": endpoint,
+            "ssmCommandId": command_id,
         }),
     }
+
+
+# ─── Phase 2: Check Progress ────────────────────────────────────────────────
+
+
+def _handle_check_progress():
+    """Phase 2: Check status of all deploying bookings.
+
+    Scans for bookings with status=deploying, checks their SSM command status,
+    and updates accordingly.
+    """
+    deploying_bookings = _get_deploying_bookings()
+
+    if not deploying_bookings:
+        logger.info("No deploying bookings to check")
+        return {"statusCode": 200, "body": "No deploying bookings"}
+
+    logger.info("Checking progress for %d deploying bookings", len(deploying_bookings))
+    results = []
+
+    for booking in deploying_bookings:
+        booking_id = booking["bookingId"]
+        instance_id = booking.get("instanceId", "")
+        command_id = booking.get("ssmCommandId", "")
+        region = booking.get("region", "us-east-1")
+        deployment_plan = booking.get("deploymentPlan", "")
+
+        if not command_id or not instance_id:
+            logger.warning(
+                "Booking %s missing ssmCommandId or instanceId, marking failed",
+                booking_id,
+            )
+            _update_booking_status(booking_id, "failed")
+            _send_notification(
+                f"Deployment failed: {deployment_plan}",
+                f"Booking {booking_id} missing command tracking data",
+                booking,
+                event_type="missing_command_data",
+            )
+            results.append({"bookingId": booking_id, "result": "failed_no_data"})
+            continue
+
+        ssm_client = boto3.client("ssm", region_name=region)
+        ec2_client = boto3.client("ec2", region_name=region)
+
+        # Check SSM command status
+        cmd_status = _check_command_status(ssm_client, command_id, instance_id)
+
+        if cmd_status == "InProgress":
+            logger.info("Booking %s: command %s still in progress", booking_id, command_id)
+            results.append({"bookingId": booking_id, "result": "in_progress"})
+            continue
+
+        elif cmd_status == "Failed" or cmd_status == "Error":
+            logger.error("Booking %s: command %s failed", booking_id, command_id)
+            _update_booking_status(booking_id, "failed")
+            _send_notification(
+                f"Deployment failed: {deployment_plan}",
+                f"SSM deploy command failed on {instance_id} (command: {command_id})",
+                booking,
+                event_type="deploy_command_failed",
+            )
+            results.append({"bookingId": booking_id, "result": "failed"})
+            continue
+
+        elif cmd_status == "Success":
+            logger.info("Booking %s: command %s succeeded, checking health", booking_id, command_id)
+
+            # Command completed successfully, now check health
+            healthy = False
+            start = time.time()
+            while time.time() - start < HEALTH_CHECK_TIMEOUT:
+                if _check_health(ssm_client, instance_id):
+                    healthy = True
+                    break
+                time.sleep(HEALTH_CHECK_INTERVAL)
+
+            if not healthy:
+                logger.error("Health check failed for booking %s after command success", booking_id)
+                _update_booking_status(booking_id, "failed")
+                _send_notification(
+                    f"Deployment failed: {deployment_plan}",
+                    f"Service on {instance_id} did not become healthy after successful deployment",
+                    booking,
+                    event_type="health_check_timeout",
+                )
+                results.append({"bookingId": booking_id, "result": "failed_health"})
+                continue
+
+            # Service is healthy - get endpoint
+            public_ip = _get_public_ip(ec2_client, instance_id)
+            endpoint = f"http://{public_ip}:{SGLANG_PORT}/v1" if public_ip else ""
+
+            # Update booking to ready
+            _update_booking_status(booking_id, "ready", endpoint=endpoint)
+
+            # Apply IP whitelist if configured
+            whitelist_ips = booking.get("whitelistIps", [])
+            if whitelist_ips:
+                try:
+                    from ec2_manager import update_security_group
+                    update_security_group(instance_id, region, whitelist_ips)
+                except ImportError:
+                    logger.warning("ec2_manager not available in deployer context")
+
+            _send_notification(
+                f"Deployment ready: {deployment_plan}",
+                f"Service is healthy and ready.\nEndpoint: {endpoint}",
+                {**booking, "endpoint": endpoint, "status": "ready"},
+                event_type="deployment_ready",
+            )
+            results.append({"bookingId": booking_id, "result": "ready", "endpoint": endpoint})
+
+    return {
+        "statusCode": 200,
+        "body": json.dumps({"results": results}),
+    }
+
+
+# ─── Lambda Handler ─────────────────────────────────────────────────────────
+
+
+def handler(event, context):
+    """Main entry point. Routes to Phase 1 or Phase 2 based on event content.
+
+    Phase 2 (check_progress): triggered by EventBridge schedule with
+      {"action": "check_progress"} payload.
+
+    Phase 1 (deploy): triggered by capacity poller direct invocation with
+      {"detail": {"instance-id": "...", "state": "running"}, "booking_id": "..."}
+    """
+    logger.info("Deployer invoked. Event: %s", json.dumps(event, default=str))
+
+    action = event.get("action", "")
+
+    if action == "check_progress":
+        return _handle_check_progress()
+    else:
+        # Default: Phase 1 deploy (invoked by poller)
+        return _handle_deploy(event)
