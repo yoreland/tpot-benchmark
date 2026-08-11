@@ -60,8 +60,12 @@ const BookingPage: React.FC = () => {
 
   return (
     <div>
-      <Title level={3}>创建 GPU 预约</Title>
-      <Card style={{ maxWidth: 600 }}>
+      <Title level={3} style={{ marginBottom: 16 }}>创建 GPU 预约</Title>
+      <Card
+        style={{ maxWidth: 600, borderRadius: 8 }}
+        styles={{ header: { borderBottom: '2px solid #ff9900' } }}
+        title="选择部署方案"
+      >
         <Space direction="vertical" style={{ width: '100%' }} size="large">
           <div>
             <Text strong>选择部署方案：</Text>
@@ -74,6 +78,7 @@ const BookingPage: React.FC = () => {
                 value: plan.id,
                 label: `${plan.name} - ${plan.instanceType} - ${plan.description}`,
               }))}
+              size="large"
             />
           </div>
           <Button
@@ -83,6 +88,7 @@ const BookingPage: React.FC = () => {
             loading={loading}
             onClick={() => handleSubmit()}
             block
+            style={{ height: 44, fontWeight: 600 }}
           >
             一键预约
           </Button>

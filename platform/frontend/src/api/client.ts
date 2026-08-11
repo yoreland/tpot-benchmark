@@ -8,7 +8,7 @@ import type {
 const BASE_URL = import.meta.env.VITE_API_URL || '';
 
 function getAuthHeader(): string {
-  const creds = sessionStorage.getItem('tpot_credentials');
+  const creds = sessionStorage.getItem('gpu_console_credentials');
   if (!creds) return '';
   return `Basic ${btoa(creds)}`;
 }
@@ -48,15 +48,15 @@ async function request<T>(
 }
 
 export function setCredentials(username: string, password: string): void {
-  sessionStorage.setItem('tpot_credentials', `${username}:${password}`);
+  sessionStorage.setItem('gpu_console_credentials', `${username}:${password}`);
 }
 
 export function getCredentials(): string | null {
-  return sessionStorage.getItem('tpot_credentials');
+  return sessionStorage.getItem('gpu_console_credentials');
 }
 
 export function clearCredentials(): void {
-  sessionStorage.removeItem('tpot_credentials');
+  sessionStorage.removeItem('gpu_console_credentials');
 }
 
 export async function getStatus(): Promise<StatusResponse> {

@@ -61,8 +61,8 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div>
-      <Title level={3}>通知设置</Title>
-      <Card style={{ maxWidth: 600 }}>
+      <Title level={3} style={{ marginBottom: 16 }}>通知设置</Title>
+      <Card style={{ maxWidth: 600, borderRadius: 8 }}>
         <Form form={form} layout="vertical">
           <Form.Item
             name="feishuWebhook"
