@@ -431,12 +431,10 @@ def _handle_deploy(event):
 
     # Determine compose file from deployment plan
     plan_compose_map = {
-        "h200-tp4-eagle": "docker-compose-tp4-h200.yaml",
         "h200-tp8-eagle": "docker-compose-tp8-h200.yaml",
         "b300-tp8-eagle": "docker-compose-tp8-b300.yaml",
         "b300-pd-2p2d": "docker-compose-pd-2p2d.yaml",
-        "b300-pd-v4flash": "docker-compose-pd-v4flash-b300.yaml",
-        "b200-tp8-unified": "docker-compose-tp8-b200.yaml",
+        "b300-pd-3p1d": "docker-compose-pd-v4flash-b300.yaml",
     }
     compose_file = plan_compose_map.get(deployment_plan, "docker-compose.yaml")
 
