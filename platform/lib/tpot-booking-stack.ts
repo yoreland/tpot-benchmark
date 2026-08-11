@@ -257,6 +257,74 @@ def generate_policy(principal_id, effect, resource):
       },
     });
 
+    // Deployer Lambda
+    const deployerRole = new iam.Role(this, 'DeployerRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
+    });
+
+    deployerRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'ec2:DescribeInstances',
+        'ec2:AuthorizeSecurityGroupIngress',
+        'ec2:RevokeSecurityGroupIngress',
+        'ec2:DescribeSecurityGroups',
+        'ec2:CreateSecurityGroup',
+        'ec2:DeleteSecurityGroup',
+      ],
+      resources: ['*'],
+    }));
+
+    deployerRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:PutItem',
+        'dynamodb:UpdateItem',
+        'dynamodb:Query',
+        'dynamodb:Scan',
+      ],
+      resources: [
+        bookingTable.tableArn,
+        `${bookingTable.tableArn}/index/*`,
+      ],
+    }));
+
+    deployerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'],
+      resources: [notificationConfigTable.tableArn],
+    }));
+
+    deployerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['sns:Publish'],
+      resources: [notificationTopic.topicArn],
+    }));
+
+    deployerRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'ssm:GetParameter',
+        'ssm:SendCommand',
+        'ssm:GetCommandInvocation',
+        'ssm:DescribeInstanceInformation',
+      ],
+      resources: ['*'],
+    }));
+
+    const deployer = new lambda.Function(this, 'DeployerFunction', {
+      functionName: 'tpot-booking-deployer',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'handler.handler',
+      code: lambda.Code.fromAsset('./lambda/deployer'),
+      role: deployerRole,
+      timeout: cdk.Duration.minutes(10),
+      environment: {
+        BOOKING_TABLE: bookingTable.tableName,
+        NOTIFICATION_TOPIC_ARN: notificationTopic.topicArn,
+        NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
+      },
+    });
+
     // Capacity Poller Lambda
     const capacityPollerRole = new iam.Role(this, 'CapacityPollerRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -325,6 +393,14 @@ def generate_policy(principal_id, effect, resource):
       resources: [`arn:aws:iam::${this.account}:role/tpot-bench-ec2-role`],
     }));
 
+    // Grant poller permission to invoke deployer directly (replaces EventBridge
+    // EC2 state-change rule which only fires in the stack region and misses
+    // cross-region instance launches).
+    capacityPollerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [deployer.functionArn],
+    }));
+
     const capacityPoller = new lambda.Function(this, 'CapacityPoller', {
       functionName: 'tpot-booking-capacity-poller',
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -339,72 +415,7 @@ def generate_policy(principal_id, effect, resource):
         INSTANCE_PROFILE: 'tpot-bench-ec2-profile',
         SECURITY_GROUP: 'tpot-bench-noingress-sg',
         REGIONS: 'us-east-1,us-east-2,us-west-2',
-      },
-    });
-
-    // Deployer Lambda
-    const deployerRole = new iam.Role(this, 'DeployerRole', {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-      ],
-    });
-
-    deployerRole.addToPolicy(new iam.PolicyStatement({
-      actions: [
-        'ec2:DescribeInstances',
-        'ec2:AuthorizeSecurityGroupIngress',
-        'ec2:RevokeSecurityGroupIngress',
-        'ec2:DescribeSecurityGroups',
-        'ec2:CreateSecurityGroup',
-        'ec2:DeleteSecurityGroup',
-      ],
-      resources: ['*'],
-    }));
-
-    deployerRole.addToPolicy(new iam.PolicyStatement({
-      actions: [
-        'dynamodb:GetItem',
-        'dynamodb:PutItem',
-        'dynamodb:UpdateItem',
-        'dynamodb:Query',
-      ],
-      resources: [
-        bookingTable.tableArn,
-        `${bookingTable.tableArn}/index/*`,
-      ],
-    }));
-
-    deployerRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['dynamodb:GetItem'],
-      resources: [notificationConfigTable.tableArn],
-    }));
-
-    deployerRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['sns:Publish'],
-      resources: [notificationTopic.topicArn],
-    }));
-
-    deployerRole.addToPolicy(new iam.PolicyStatement({
-      actions: [
-        'ssm:GetParameter',
-        'ssm:SendCommand',
-        'ssm:GetCommandInvocation',
-      ],
-      resources: ['*'],
-    }));
-
-    const deployer = new lambda.Function(this, 'DeployerFunction', {
-      functionName: 'tpot-booking-deployer',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda.Code.fromAsset('./lambda/deployer'),
-      role: deployerRole,
-      timeout: cdk.Duration.minutes(10),
-      environment: {
-        BOOKING_TABLE: bookingTable.tableName,
-        NOTIFICATION_TOPIC_ARN: notificationTopic.topicArn,
-        NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
+        DEPLOYER_FUNCTION_NAME: deployer.functionName,
       },
     });
 
@@ -416,20 +427,6 @@ def generate_policy(principal_id, effect, resource):
       description: 'Trigger capacity poller Lambda every minute to scan for spot instances',
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(capacityPoller)],
-    });
-
-    // EC2 state change rule to trigger deployer when instance reaches running
-    new events.Rule(this, 'DeployerEc2StateChangeRule', {
-      ruleName: 'tpot-booking-deployer-ec2-state-change',
-      description: 'Trigger deployer Lambda when EC2 instances reach running state',
-      eventPattern: {
-        source: ['aws.ec2'],
-        detailType: ['EC2 Instance State-change Notification'],
-        detail: {
-          state: ['running'],
-        },
-      },
-      targets: [new targets.LambdaFunction(deployer)],
     });
 
     // ─── EC2 Instance Profile for SSM ──────────────────────────────────

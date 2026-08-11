@@ -1,10 +1,10 @@
 """
 T-POT Booking Platform - Deployer Lambda Handler.
 
-Triggered by EventBridge rule monitoring EC2 instance state changes.
+Invoked asynchronously by the capacity poller after a spot instance is launched.
 When a tpot-benchmark instance reaches 'running' state:
   1. Waits for instance to be reachable via SSM
-  2. Executes docker-compose deployment via SSM RunCommand
+  2. Writes compose file to instance and runs docker-compose via SSM RunCommand
   3. Monitors health endpoint on port 30080
   4. Updates booking status and sends notifications
 """
@@ -14,6 +14,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
@@ -35,15 +36,28 @@ HEALTH_CHECK_TIMEOUT = 180  # seconds to wait for service health
 HEALTH_CHECK_INTERVAL = 15  # seconds between health checks
 DEPLOY_COMMAND_TIMEOUT = 240  # seconds for docker-compose deployment command
 
-# Compose file paths relative to the scripts directory on instance
-SCRIPTS_S3_PREFIX = "scripts"
+# Path to bundled compose files (packaged with the Lambda)
+COMPOSE_FILES_DIR = Path(__file__).parent / "compose-files"
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 
+def _get_booking_by_id(booking_id: str) -> dict:
+    """Fetch a booking directly by its ID."""
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table(BOOKING_TABLE)
+
+    try:
+        resp = table.get_item(Key={"bookingId": booking_id})
+        return resp.get("Item", {})
+    except ClientError as e:
+        logger.error("Failed to get booking %s: %s", booking_id, e)
+    return {}
+
+
 def _get_booking_by_instance(instance_id: str) -> dict:
-    """Find the booking associated with an instance ID."""
+    """Find the booking associated with an instance ID (fallback for legacy events)."""
     dynamodb = boto3.resource("dynamodb")
     table = dynamodb.Table(BOOKING_TABLE)
 
@@ -191,16 +205,41 @@ def _run_command(
         return {"success": False, "output": "", "error": str(e)}
 
 
+def _load_compose_content(compose_file: str) -> str:
+    """Load compose file content from the bundled compose-files directory."""
+    compose_path = COMPOSE_FILES_DIR / compose_file
+    if compose_path.exists():
+        return compose_path.read_text()
+    logger.error("Compose file not found: %s", compose_path)
+    return ""
+
+
 def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
     """Generate the docker-compose deployment commands.
 
-    These commands pull and start the docker-compose stack on the instance.
-    The compose files are expected to be available at /opt/tpot-bench/scripts/.
+    The compose file content is inlined via heredoc so no external S3 bucket
+    is required. A shebang forces bash execution under SSM.
     """
+    compose_content = _load_compose_content(compose_file)
+    if not compose_content:
+        return [
+            "#!/bin/bash",
+            f"echo 'ERROR: compose file {compose_file} not found in Lambda bundle' >&2",
+            "exit 1",
+        ]
+
     commands = [
+        "#!/bin/bash",
         "set -euo pipefail",
-        "exec > >(tee -a /var/log/tpot-bench/deploy.log) 2>&1",
+        "mkdir -p /var/log/tpot-bench",
+        "exec 1>/var/log/tpot-bench/deploy.log 2>&1",
         "echo 'Starting deployment...'",
+        # Create scripts directory
+        "mkdir -p /opt/tpot-bench/scripts",
+        # Write compose file via heredoc
+        f"cat << 'COMPOSE_EOF' > /opt/tpot-bench/scripts/{compose_file}",
+        compose_content,
+        "COMPOSE_EOF",
         # Setup NVMe RAID if available
         "if [ -b /dev/nvme1n1 ]; then",
         "  echo 'Setting up NVMe RAID...'",
@@ -212,21 +251,11 @@ def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
         # Pull docker images and start services
         f"echo 'Deploying with compose file: {compose_file}'",
         "cd /opt/tpot-bench/scripts",
-        # Fetch compose files from S3 if not present
-        "if [ ! -f docker-compose.yaml ]; then",
-        f"  echo 'Fetching {compose_file}...'",
-        f"  aws s3 cp s3://tpot-bench-scripts/{compose_file} docker-compose.yaml || true",
-        "fi",
         # Stop any existing services
         "docker compose down --remove-orphans 2>/dev/null || true",
         # Pull and start
-        f"if [ -f {compose_file} ]; then",
-        f"  docker compose -f {compose_file} pull",
-        f"  docker compose -f {compose_file} up -d",
-        "else",
-        "  docker compose pull",
-        "  docker compose up -d",
-        "fi",
+        f"docker compose -f {compose_file} pull",
+        f"docker compose -f {compose_file} up -d",
         f"echo 'Deployment started for plan: {deployment_plan}'",
     ]
     return commands
@@ -263,15 +292,19 @@ def _get_public_ip(ec2_client, instance_id: str) -> str:
 
 
 def handler(event, context):
-    """Main entry point. Triggered by EC2 state change events.
+    """Main entry point. Invoked by the capacity poller after instance launch.
 
-    Expected event format (from EventBridge):
+    Expected event format (from poller direct invocation):
     {
       "detail": {
         "instance-id": "i-xxx",
         "state": "running"
-      }
+      },
+      "booking_id": "booking-xxx"
     }
+
+    Also supports legacy EventBridge format (without booking_id) for
+    backward compatibility.
     """
     logger.info("Deployer invoked. Event: %s", json.dumps(event, default=str))
 
@@ -288,8 +321,12 @@ def handler(event, context):
         logger.info("Instance %s state is %s, not running. Skipping.", instance_id, state)
         return {"statusCode": 200, "body": "Not a running state event"}
 
-    # Look up booking for this instance
-    booking = _get_booking_by_instance(instance_id)
+    # Look up booking: prefer booking_id from event, fall back to scan
+    booking_id = event.get("booking_id", "")
+    if booking_id:
+        booking = _get_booking_by_id(booking_id)
+    else:
+        booking = _get_booking_by_instance(instance_id)
     if not booking:
         logger.info("No booking found for instance %s, skipping", instance_id)
         return {"statusCode": 200, "body": "No booking for this instance"}
@@ -314,6 +351,7 @@ def handler(event, context):
         "h200-tp8-eagle": "docker-compose-tp8-h200.yaml",
         "b300-tp8-eagle": "docker-compose-tp8-b300.yaml",
         "b300-pd-2p2d": "docker-compose-pd-2p2d.yaml",
+        "b300-pd-v4flash": "docker-compose-pd-v4flash-b300.yaml",
         "b200-tp8-unified": "docker-compose-tp8-b200.yaml",
     }
     compose_file = plan_compose_map.get(deployment_plan, "docker-compose.yaml")

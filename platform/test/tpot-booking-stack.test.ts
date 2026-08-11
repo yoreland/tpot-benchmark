@@ -110,15 +110,18 @@ describe('TpotBookingStack', () => {
     });
   });
 
-  test('creates EventBridge rule for EC2 state changes', () => {
-    template.hasResourceProperties('AWS::Events::Rule', {
-      Name: 'tpot-booking-deployer-ec2-state-change',
-      EventPattern: {
-        source: ['aws.ec2'],
-        'detail-type': ['EC2 Instance State-change Notification'],
-        detail: { state: ['running'] },
-      },
-    });
+  test('poller role has lambda:InvokeFunction permission for deployer', () => {
+    const policies = template.findResources('AWS::IAM::Policy');
+    const pollerPolicy = Object.values(policies).find(
+      (p: any) => p.Properties.PolicyName && p.Properties.PolicyName.startsWith('CapacityPollerRole'),
+    ) as any;
+    expect(pollerPolicy).toBeDefined();
+    const statements = pollerPolicy.Properties.PolicyDocument.Statement;
+    const invokeStatement = statements.find(
+      (s: any) => s.Action === 'lambda:InvokeFunction',
+    );
+    expect(invokeStatement).toBeDefined();
+    expect(invokeStatement.Effect).toBe('Allow');
   });
 
   test('creates EC2 instance profile for SSM', () => {

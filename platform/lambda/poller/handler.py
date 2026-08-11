@@ -4,6 +4,10 @@ T-POT Booking Platform - Capacity Poller Lambda Handler.
 Triggered by EventBridge on a schedule. Queries DynamoDB for bookings with
 status=polling, then attempts to launch spot instances in configured regions.
 
+After a successful launch, invokes the deployer Lambda asynchronously instead
+of relying on EventBridge EC2 state-change events (which only fire in the
+instance's region and would miss cross-region launches).
+
 Reuses the direct-launch pattern from the existing capacity poller (probe-then-launch
 is too slow for B300 capacity windows < 20s).
 """
@@ -29,6 +33,7 @@ NOTIFICATION_TOPIC_ARN = os.environ.get("NOTIFICATION_TOPIC_ARN", "")
 INSTANCE_PROFILE = os.environ.get("INSTANCE_PROFILE", "tpot-bench-ec2-profile")
 SECURITY_GROUP_NAME = os.environ.get("SECURITY_GROUP", "tpot-bench-noingress-sg")
 REGIONS = os.environ.get("REGIONS", "us-east-1,us-east-2,us-west-2").split(",")
+DEPLOYER_FUNCTION_NAME = os.environ.get("DEPLOYER_FUNCTION_NAME", "tpot-booking-deployer")
 
 DLAMI_SSM_PARAM = (
     "/aws/service/deeplearning/ami/x86_64/"
@@ -278,6 +283,33 @@ def _send_notification(title: str, message: str, booking: dict) -> None:
         logger.warning("Failed to send SNS notification: %s", e)
 
 
+def _invoke_deployer(instance_id: str, booking_id: str) -> None:
+    """Asynchronously invoke the deployer Lambda with instance and booking info."""
+    try:
+        lambda_client = boto3.client("lambda")
+        payload = {
+            "detail": {
+                "instance-id": instance_id,
+                "state": "running",
+            },
+            "booking_id": booking_id,
+        }
+        lambda_client.invoke(
+            FunctionName=DEPLOYER_FUNCTION_NAME,
+            InvocationType="Event",
+            Payload=json.dumps(payload),
+        )
+        logger.info(
+            "Invoked deployer for instance %s, booking %s",
+            instance_id,
+            booking_id,
+        )
+    except ClientError as e:
+        logger.error(
+            "Failed to invoke deployer for instance %s: %s", instance_id, e
+        )
+
+
 # ─── Lambda Handler ─────────────────────────────────────────────────────────
 
 
@@ -400,6 +432,10 @@ def handler(event, context):
                         f"Instance {instance_id} launched for booking {booking_id}",
                         booking,
                     )
+
+                    # Invoke deployer Lambda asynchronously (replaces EventBridge
+                    # EC2 state-change rule which only fires in the stack region)
+                    _invoke_deployer(instance_id, booking_id)
 
                     results.append({
                         "bookingId": booking_id,
