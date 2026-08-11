@@ -102,4 +102,28 @@ describe('TpotBookingStack', () => {
     template.hasOutput('NotificationTopicArn', {});
     template.hasOutput('FrontendBucketName', {});
   });
+
+  test('creates EventBridge schedule rule for capacity poller', () => {
+    template.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'tpot-booking-capacity-poller-schedule',
+      ScheduleExpression: 'rate(1 minute)',
+    });
+  });
+
+  test('creates EventBridge rule for EC2 state changes', () => {
+    template.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'tpot-booking-deployer-ec2-state-change',
+      EventPattern: {
+        source: ['aws.ec2'],
+        'detail-type': ['EC2 Instance State-change Notification'],
+        detail: { state: ['running'] },
+      },
+    });
+  });
+
+  test('creates EC2 instance profile for SSM', () => {
+    template.hasResourceProperties('AWS::IAM::InstanceProfile', {
+      InstanceProfileName: 'tpot-bench-ec2-profile',
+    });
+  });
 });

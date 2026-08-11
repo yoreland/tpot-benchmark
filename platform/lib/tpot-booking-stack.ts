@@ -9,6 +9,8 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
@@ -231,6 +233,21 @@ def generate_policy(principal_id, effect, resource):
       resources: [`${frontendBucket.bucketArn}/*`],
     }));
 
+    apiHandlerRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'ec2:TerminateInstances',
+        'ec2:DescribeInstances',
+        'ec2:DescribeSecurityGroups',
+        'ec2:CreateSecurityGroup',
+        'ec2:DeleteSecurityGroup',
+        'ec2:AuthorizeSecurityGroupIngress',
+        'ec2:RevokeSecurityGroupIngress',
+        'ec2:ModifyInstanceAttribute',
+        'ec2:CreateTags',
+      ],
+      resources: ['*'],
+    }));
+
     const apiHandler = new lambda.Function(this, 'ApiHandler', {
       functionName: 'tpot-booking-api-handler',
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -375,6 +392,50 @@ def generate_policy(principal_id, effect, resource):
       },
     });
 
+    // ─── EventBridge Rules ─────────────────────────────────────────────
+
+    // Schedule rule to trigger capacity poller every minute
+    new events.Rule(this, 'CapacityPollerSchedule', {
+      ruleName: 'tpot-booking-capacity-poller-schedule',
+      description: 'Trigger capacity poller Lambda every minute to scan for spot instances',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      targets: [new targets.LambdaFunction(capacityPoller)],
+    });
+
+    // EC2 state change rule to trigger deployer when instance reaches running
+    new events.Rule(this, 'DeployerEc2StateChangeRule', {
+      ruleName: 'tpot-booking-deployer-ec2-state-change',
+      description: 'Trigger deployer Lambda when EC2 instances reach running state',
+      eventPattern: {
+        source: ['aws.ec2'],
+        detailType: ['EC2 Instance State-change Notification'],
+        detail: {
+          state: ['running'],
+        },
+      },
+      targets: [new targets.LambdaFunction(deployer)],
+    });
+
+    // ─── EC2 Instance Profile for SSM ──────────────────────────────────
+
+    const ec2Role = new iam.Role(this, 'TpotBenchEc2Role', {
+      roleName: 'tpot-bench-ec2-role',
+      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
+      ],
+    });
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject'],
+      resources: ['arn:aws:s3:::tpot-bench-scripts/*'],
+    }));
+
+    new iam.CfnInstanceProfile(this, 'TpotBenchEc2Profile', {
+      instanceProfileName: 'tpot-bench-ec2-profile',
+      roles: [ec2Role.roleName],
+    });
+
     // ─── API Gateway Integration ───────────────────────────────────────
 
     const apiIntegration = new apigateway.LambdaIntegration(apiHandler);
@@ -394,6 +455,10 @@ def generate_policy(principal_id, effect, resource):
     notifications.addMethod('GET', apiIntegration);
     notifications.addMethod('POST', apiIntegration);
     notifications.addMethod('PUT', apiIntegration);
+
+    // /notifications/test-webhook resource
+    const testWebhook = notifications.addResource('test-webhook');
+    testWebhook.addMethod('POST', apiIntegration);
 
     // /status resource
     const status = api.root.addResource('status');

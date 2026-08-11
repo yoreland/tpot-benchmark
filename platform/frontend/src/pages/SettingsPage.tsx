@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Input, Button, Form, message, Typography, Space } from 'antd';
-import { MailOutlined, LinkOutlined } from '@ant-design/icons';
-import { getNotificationConfig, updateNotificationConfig } from '../api/client';
+import { LinkOutlined } from '@ant-design/icons';
+import { getNotificationConfig, updateNotificationConfig, testFeishuWebhook } from '../api/client';
 
 const { Title, Text } = Typography;
 
@@ -18,7 +18,6 @@ const SettingsPage: React.FC = () => {
     try {
       const config = await getNotificationConfig();
       form.setFieldsValue({
-        email: config.email || '',
         feishuWebhook: config.feishuWebhook || '',
       });
     } catch (err) {
@@ -31,7 +30,6 @@ const SettingsPage: React.FC = () => {
     try {
       const values = await form.validateFields();
       await updateNotificationConfig({
-        email: values.email || undefined,
         feishuWebhook: values.feishuWebhook || undefined,
       });
       message.success('通知设置已保存');
@@ -51,16 +49,7 @@ const SettingsPage: React.FC = () => {
     }
     setTestingWebhook(true);
     try {
-      await fetch(webhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          msg_type: 'text',
-          content: {
-            text: '[T-POT Booking] 测试通知 - Webhook 配置成功!',
-          },
-        }),
-      });
+      await testFeishuWebhook(webhook);
       message.success('测试消息已发送，请检查飞书');
     } catch (err) {
       message.error('发送测试消息失败');
@@ -75,19 +64,6 @@ const SettingsPage: React.FC = () => {
       <Title level={3}>通知设置</Title>
       <Card style={{ maxWidth: 600 }}>
         <Form form={form} layout="vertical">
-          <Form.Item
-            name="email"
-            label={
-              <Space>
-                <MailOutlined />
-                <Text>邮件通知</Text>
-              </Space>
-            }
-            help="预约状态变更时发送邮件通知"
-          >
-            <Input placeholder="your-email@example.com" type="email" />
-          </Form.Item>
-
           <Form.Item
             name="feishuWebhook"
             label={

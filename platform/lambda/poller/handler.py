@@ -22,7 +22,7 @@ logger.setLevel(logging.INFO)
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 
-ACCOUNT_ID = "077090643075"
+ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", boto3.client("sts").get_caller_identity()["Account"] if not os.environ.get("AWS_LAMBDA_FUNCTION_NAME") else "")
 PROJECT_TAG = "tpot-benchmark"
 BOOKING_TABLE = os.environ.get("BOOKING_TABLE", "TpotBookingTable")
 NOTIFICATION_TOPIC_ARN = os.environ.get("NOTIFICATION_TOPIC_ARN", "")
@@ -36,18 +36,36 @@ DLAMI_SSM_PARAM = (
 )
 ROOT_VOLUME_GB = 200
 
-# Subnet mapping (verified working subnets)
-SUBNET_MAP = {
-    "us-east-1a": "subnet-0ae36a5845b616649",
-    "us-east-1c": "subnet-0519fb0c779ad92c7",
-    "us-east-2a": "subnet-09bfc4e5573173d64",
-    "us-east-2b": "subnet-0c900c1611bf34e49",
-    "us-east-2c": "subnet-087bce7226890195e",
-    "us-west-2a": "subnet-0570e1b3d4cabf650",
-    "us-west-2b": "subnet-020aa087d32834a04",
-    "us-west-2c": "subnet-08a022641b49f4630",
-    "us-west-2d": "subnet-03f3fa89ad241fbbb",
-}
+# Subnet mapping loaded from environment or SSM at runtime.
+# Format: comma-separated "az=subnet-id" pairs in SUBNET_MAP_CONFIG env var.
+# Falls back to defaults if not configured.
+_SUBNET_MAP_RAW = os.environ.get("SUBNET_MAP_CONFIG", "")
+
+
+def _load_subnet_map() -> dict:
+    """Load subnet mapping from env config or return defaults."""
+    if _SUBNET_MAP_RAW:
+        result = {}
+        for entry in _SUBNET_MAP_RAW.split(","):
+            if "=" in entry:
+                az, subnet = entry.split("=", 1)
+                result[az.strip()] = subnet.strip()
+        return result
+    # Default mapping (override via SUBNET_MAP_CONFIG env var)
+    return {
+        "us-east-1a": "subnet-0ae36a5845b616649",
+        "us-east-1c": "subnet-0519fb0c779ad92c7",
+        "us-east-2a": "subnet-09bfc4e5573173d64",
+        "us-east-2b": "subnet-0c900c1611bf34e49",
+        "us-east-2c": "subnet-087bce7226890195e",
+        "us-west-2a": "subnet-0570e1b3d4cabf650",
+        "us-west-2b": "subnet-020aa087d32834a04",
+        "us-west-2c": "subnet-08a022641b49f4630",
+        "us-west-2d": "subnet-03f3fa89ad241fbbb",
+    }
+
+
+SUBNET_MAP = _load_subnet_map()
 
 # Max spot prices per instance type
 MAX_PRICES = {
@@ -330,26 +348,42 @@ def handler(event, context):
                 )
 
                 if instance_id:
-                    # Update booking status to launching
+                    # Update booking status to launching with condition
+                    # to prevent duplicate launches from concurrent invocations
                     now = datetime.now(timezone.utc).isoformat()
-                    table.update_item(
-                        Key={"bookingId": booking_id},
-                        UpdateExpression=(
-                            "SET #s = :s, instanceId = :i, "
-                            "#r = :r, az = :az, updatedAt = :u"
-                        ),
-                        ExpressionAttributeNames={
-                            "#s": "status",
-                            "#r": "region",
-                        },
-                        ExpressionAttributeValues={
-                            ":s": "launching",
-                            ":i": instance_id,
-                            ":r": region,
-                            ":az": az,
-                            ":u": now,
-                        },
-                    )
+                    try:
+                        table.update_item(
+                            Key={"bookingId": booking_id},
+                            UpdateExpression=(
+                                "SET #s = :s, instanceId = :i, "
+                                "#r = :r, az = :az, updatedAt = :u"
+                            ),
+                            ConditionExpression="#s = :expected_status",
+                            ExpressionAttributeNames={
+                                "#s": "status",
+                                "#r": "region",
+                            },
+                            ExpressionAttributeValues={
+                                ":s": "launching",
+                                ":i": instance_id,
+                                ":r": region,
+                                ":az": az,
+                                ":u": now,
+                                ":expected_status": "polling",
+                            },
+                        )
+                    except ClientError as e:
+                        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                            # Another invocation already claimed this booking;
+                            # terminate the instance we just launched
+                            logger.warning(
+                                "Booking %s already claimed, terminating duplicate instance %s",
+                                booking_id,
+                                instance_id,
+                            )
+                            ec2_client.terminate_instances(InstanceIds=[instance_id])
+                            break
+                        raise
 
                     _send_notification(
                         f"Capacity found: {instance_type} @ {az}",

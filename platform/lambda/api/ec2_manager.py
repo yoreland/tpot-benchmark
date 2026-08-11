@@ -229,6 +229,66 @@ def update_security_group(
         return False
 
 
+def delete_security_group(instance_id: str, region: str) -> bool:
+    """Delete the per-instance security group created for IP whitelisting.
+
+    Should be called before terminating an instance to prevent orphaned
+    security groups accumulating toward the VPC limit.
+
+    Args:
+        instance_id: The EC2 instance ID.
+        region: The AWS region.
+
+    Returns:
+        True if the security group was deleted or did not exist, False on error.
+    """
+    ec2 = _get_ec2_client(region)
+    sg_name = f"tpot-booking-{instance_id}"
+
+    try:
+        # First detach the SG from the instance if still attached
+        try:
+            resp = ec2.describe_instances(InstanceIds=[instance_id])
+            if resp["Reservations"] and resp["Reservations"][0]["Instances"]:
+                instance = resp["Reservations"][0]["Instances"][0]
+                current_sgs = [
+                    sg["GroupId"] for sg in instance.get("SecurityGroups", [])
+                ]
+                # Find and remove our SG
+                sg_resp = ec2.describe_security_groups(
+                    Filters=[
+                        {"Name": "group-name", "Values": [sg_name]},
+                    ]
+                )
+                if sg_resp["SecurityGroups"]:
+                    sg_id = sg_resp["SecurityGroups"][0]["GroupId"]
+                    if sg_id in current_sgs:
+                        current_sgs.remove(sg_id)
+                        if current_sgs:
+                            ec2.modify_instance_attribute(
+                                InstanceId=instance_id, Groups=current_sgs
+                            )
+        except ClientError:
+            pass  # Instance may already be terminated
+
+        # Delete the security group
+        sg_resp = ec2.describe_security_groups(
+            Filters=[
+                {"Name": "group-name", "Values": [sg_name]},
+            ]
+        )
+        if sg_resp["SecurityGroups"]:
+            sg_id = sg_resp["SecurityGroups"][0]["GroupId"]
+            ec2.delete_security_group(GroupId=sg_id)
+            logger.info("Deleted security group %s (%s)", sg_name, sg_id)
+        return True
+    except ClientError as e:
+        logger.warning(
+            "Failed to delete security group for %s: %s", instance_id, e
+        )
+        return False
+
+
 def get_instance_endpoint(instance_id: str, region: str) -> str:
     """Get the OpenAI-compatible endpoint for an instance.
 

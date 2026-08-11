@@ -28,10 +28,12 @@ NOTIFICATION_TOPIC_ARN = os.environ.get("NOTIFICATION_TOPIC_ARN", "")
 PROJECT_TAG = "tpot-benchmark"
 SGLANG_PORT = 30080
 
-# Timeouts
-SSM_WAIT_TIMEOUT = 300  # seconds to wait for SSM readiness
-HEALTH_CHECK_TIMEOUT = 600  # seconds to wait for service health
-HEALTH_CHECK_INTERVAL = 30  # seconds between health checks
+# Timeouts - must fit within Lambda's 10-minute (600s) timeout.
+# Budget: SSM wait (120s) + deploy command (240s) + health check (180s) = 540s max
+SSM_WAIT_TIMEOUT = 120  # seconds to wait for SSM readiness
+HEALTH_CHECK_TIMEOUT = 180  # seconds to wait for service health
+HEALTH_CHECK_INTERVAL = 15  # seconds between health checks
+DEPLOY_COMMAND_TIMEOUT = 240  # seconds for docker-compose deployment command
 
 # Compose file paths relative to the scripts directory on instance
 SCRIPTS_S3_PREFIX = "scripts"
@@ -319,7 +321,7 @@ def handler(event, context):
 
     # Run deployment commands
     commands = _get_compose_commands(deployment_plan, compose_file)
-    result = _run_command(ssm_client, instance_id, commands, timeout=600)
+    result = _run_command(ssm_client, instance_id, commands, timeout=DEPLOY_COMMAND_TIMEOUT)
 
     if not result["success"]:
         logger.error("Deployment command failed: %s", result["error"])

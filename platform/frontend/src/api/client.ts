@@ -65,7 +65,8 @@ export async function getStatus(): Promise<StatusResponse> {
 
 export async function listBookings(status?: string): Promise<Booking[]> {
   const params = status ? `?status=${status}` : '';
-  return request<Booking[]>(`/bookings${params}`);
+  const resp = await request<{ bookings: Booking[]; count: number }>(`/bookings${params}`);
+  return resp.bookings;
 }
 
 export async function getBooking(id: string): Promise<Booking> {
@@ -78,7 +79,7 @@ export async function createBooking(
 ): Promise<Booking> {
   return request<Booking>('/bookings', {
     method: 'POST',
-    body: JSON.stringify({ deploymentPlanId, confirmOverride }),
+    body: JSON.stringify({ deploymentPlan: deploymentPlanId, confirmOverride }),
   });
 }
 
@@ -108,5 +109,12 @@ export async function updateNotificationConfig(
   return request<NotificationConfig>('/notifications', {
     method: 'PUT',
     body: JSON.stringify(config),
+  });
+}
+
+export async function testFeishuWebhook(webhook: string): Promise<{ message: string }> {
+  return request<{ message: string }>('/notifications/test-webhook', {
+    method: 'POST',
+    body: JSON.stringify({ webhook }),
   });
 }

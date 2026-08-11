@@ -31,7 +31,6 @@ export interface DeploymentPlan {
 }
 
 export interface NotificationConfig {
-  email?: string;
   feishuWebhook?: string;
 }
 

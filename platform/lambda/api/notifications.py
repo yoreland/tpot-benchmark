@@ -2,7 +2,6 @@
 Notification dispatch module.
 
 Supports:
-  - Email via SNS topic
   - Feishu (Lark) webhook via HTTP POST
 """
 
@@ -18,7 +17,6 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-NOTIFICATION_TOPIC_ARN = os.environ.get("NOTIFICATION_TOPIC_ARN", "")
 NOTIFICATION_CONFIG_TABLE = os.environ.get("NOTIFICATION_CONFIG_TABLE", "")
 
 
@@ -34,26 +32,6 @@ def _get_notification_config() -> dict:
     except ClientError as e:
         logger.error("Failed to load notification config: %s", e)
         return {}
-
-
-def _send_email(subject: str, message: str) -> bool:
-    """Send notification via SNS (email subscribers)."""
-    if not NOTIFICATION_TOPIC_ARN:
-        logger.warning("SNS_TOPIC_ARN not configured, skipping email notification")
-        return False
-
-    try:
-        sns = boto3.client("sns")
-        sns.publish(
-            TopicArn=NOTIFICATION_TOPIC_ARN,
-            Subject=subject[:100],
-            Message=message,
-        )
-        logger.info("Published email notification: %s", subject)
-        return True
-    except ClientError as e:
-        logger.error("Failed to publish SNS notification: %s", e)
-        return False
 
 
 def _send_feishu(webhook_url: str, title: str, content: str) -> bool:
@@ -108,7 +86,7 @@ def send_notification(
     event_type: str = "info",
     booking_data: dict = None,
 ) -> dict:
-    """Dispatch notification to all configured channels.
+    """Dispatch notification to Feishu webhook.
 
     Args:
         title: Short title/subject for the notification.
@@ -119,20 +97,12 @@ def send_notification(
     Returns:
         Dict with send results per channel.
     """
-    results = {"email": False, "feishu": False}
+    results = {"feishu": False}
 
     config = _get_notification_config()
     if not config.get("enabled", True):
         logger.info("Notifications are disabled globally")
         return results
-
-    # Build rich message content
-    full_message = message
-    if booking_data:
-        full_message += "\n\n--- Booking Details ---\n"
-        for k, v in booking_data.items():
-            if v:
-                full_message += f"  {k}: {v}\n"
 
     # Build Feishu markdown content
     feishu_content = f"**{event_type.upper()}**\n\n{message}"
@@ -141,9 +111,6 @@ def send_notification(
         for k, v in booking_data.items():
             if v:
                 feishu_content += f"**{k}**: {v}\n"
-
-    # Send email
-    results["email"] = _send_email(f"[T-POT] {title}", full_message)
 
     # Send Feishu
     feishu_webhook = config.get("feishuWebhook", "")

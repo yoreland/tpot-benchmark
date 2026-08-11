@@ -31,6 +31,7 @@ from ec2_manager import (
     check_running_instances,
     terminate_instance,
     update_security_group,
+    delete_security_group,
     get_instance_endpoint,
     list_all_instances,
 )
@@ -264,6 +265,8 @@ def delete_booking(booking_id: str) -> dict:
     instance_id = item.get("instanceId", "")
     region = item.get("region", "")
     if instance_id and region:
+        # Delete the per-instance security group before termination
+        delete_security_group(instance_id, region)
         terminate_instance(instance_id, region)
 
     # Update status
@@ -304,11 +307,10 @@ def get_notification_config() -> dict:
 
 
 def update_notification_config(body: dict) -> dict:
-    """Update notification configuration (email, Feishu webhook)."""
+    """Update notification configuration (Feishu webhook)."""
     table = _get_notification_table()
 
     config = NotificationConfig(
-        email=body.get("email", ""),
         feishuWebhook=body.get("feishuWebhook", ""),
         enabled=body.get("enabled", True),
     )
@@ -319,6 +321,41 @@ def update_notification_config(body: dict) -> dict:
     except ClientError as e:
         logger.error("Error updating notification config: %s", e)
         return _response(500, {"error": "Failed to update notification config"})
+
+
+def test_feishu_webhook(body: dict) -> dict:
+    """Test a Feishu webhook by sending a test message from the backend.
+
+    This avoids CORS issues that occur when the browser calls Feishu directly.
+    """
+    import urllib.request
+    import urllib.error
+
+    webhook_url = body.get("webhook", "")
+    if not webhook_url:
+        return _response(400, {"error": "Missing webhook URL"})
+
+    payload = json.dumps({
+        "msg_type": "text",
+        "content": {
+            "text": "[T-POT Booking] Test notification - Webhook configured successfully!",
+        },
+    }).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(
+            webhook_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp_body = resp.read().decode("utf-8")
+            return _response(200, {"message": "Test message sent", "response": resp_body})
+    except urllib.error.HTTPError as e:
+        return _response(502, {"error": f"Webhook returned HTTP {e.code}"})
+    except Exception as e:
+        return _response(502, {"error": f"Failed to send test message: {str(e)}"})
 
 
 # ─── Status Handler ─────────────────────────────────────────────────────────
@@ -396,6 +433,8 @@ def handler(event, context):
             return get_notification_config()
         elif resource == "/notifications" and http_method in ("PUT", "POST"):
             return update_notification_config(body)
+        elif resource == "/notifications/test-webhook" and http_method == "POST":
+            return test_feishu_webhook(body)
 
         # /status
         elif resource == "/status" and http_method == "GET":
