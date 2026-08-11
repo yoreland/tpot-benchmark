@@ -1,0 +1,7 @@
+{
+  "task_id": "task-booking-platform",
+  "task_description": "Build a one-click GPU instance booking platform with UI. Customers can request H200/B300/B200 spot instances with specific deployment plans (docker-compose topologies). The platform scans for global capacity, auto-deploys on success, provides an OpenAI-compatible endpoint with IP whitelist, sends notifications via email and Feishu webhook, handles same-type instance conflicts with user confirmation, and shows monitoring/history. Deployed via CDK with basic auth.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}
