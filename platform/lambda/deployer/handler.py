@@ -90,8 +90,20 @@ def _update_booking_status(
         logger.error("Failed to update booking %s: %s", booking_id, e)
 
 
-def _send_notification(title: str, message: str, booking: dict) -> None:
-    """Send notification via SNS."""
+def _send_notification(
+    title: str, message: str, booking: dict, event_type: str = "failed"
+) -> None:
+    """Send notification via Feishu webhook (and SNS as fallback)."""
+    from notifications import send_notification
+
+    send_notification(
+        title=title,
+        message=message,
+        event_type=event_type,
+        booking_data=booking,
+    )
+
+    # Also publish to SNS as fallback
     if not NOTIFICATION_TOPIC_ARN:
         return
     try:
@@ -103,7 +115,7 @@ def _send_notification(title: str, message: str, booking: dict) -> None:
             Message=full_message,
         )
     except ClientError as e:
-        logger.warning("Failed to send notification: %s", e)
+        logger.warning("Failed to send SNS notification: %s", e)
 
 
 def _wait_for_ssm(ssm_client, instance_id: str, timeout: int = SSM_WAIT_TIMEOUT) -> bool:
@@ -316,6 +328,7 @@ def handler(event, context):
             f"Deployment failed: {deployment_plan}",
             f"Instance {instance_id} did not become SSM-reachable",
             booking,
+            event_type="ssm_not_reachable",
         )
         return {"statusCode": 500, "body": "SSM timeout"}
 
@@ -330,6 +343,7 @@ def handler(event, context):
             f"Deployment failed: {deployment_plan}",
             f"Docker compose deployment failed on {instance_id}: {result['error'][:200]}",
             booking,
+            event_type="docker_compose_failed",
         )
         return {"statusCode": 500, "body": "Deployment failed"}
 
@@ -350,6 +364,7 @@ def handler(event, context):
             f"Deployment failed: {deployment_plan}",
             f"Service on {instance_id} did not become healthy within timeout",
             booking,
+            event_type="health_check_timeout",
         )
         return {"statusCode": 500, "body": "Health check timeout"}
 
@@ -374,6 +389,7 @@ def handler(event, context):
         f"Deployment ready: {deployment_plan}",
         f"Service is healthy and ready.\nEndpoint: {endpoint}",
         {**booking, "endpoint": endpoint, "status": "ready"},
+        event_type="deployment_ready",
     )
 
     return {

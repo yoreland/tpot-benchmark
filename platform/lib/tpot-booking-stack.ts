@@ -297,6 +297,11 @@ def generate_policy(principal_id, effect, resource):
     }));
 
     capacityPollerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'],
+      resources: [notificationConfigTable.tableArn],
+    }));
+
+    capacityPollerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['sns:Publish'],
       resources: [notificationTopic.topicArn],
     }));
@@ -330,6 +335,7 @@ def generate_policy(principal_id, effect, resource):
       environment: {
         BOOKING_TABLE: bookingTable.tableName,
         NOTIFICATION_TOPIC_ARN: notificationTopic.topicArn,
+        NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
         INSTANCE_PROFILE: 'tpot-bench-ec2-profile',
         SECURITY_GROUP: 'tpot-bench-noingress-sg',
         REGIONS: 'us-east-1,us-east-2,us-west-2',
@@ -370,6 +376,11 @@ def generate_policy(principal_id, effect, resource):
     }));
 
     deployerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'],
+      resources: [notificationConfigTable.tableArn],
+    }));
+
+    deployerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['sns:Publish'],
       resources: [notificationTopic.topicArn],
     }));
@@ -393,6 +404,7 @@ def generate_policy(principal_id, effect, resource):
       environment: {
         BOOKING_TABLE: bookingTable.tableName,
         NOTIFICATION_TOPIC_ARN: notificationTopic.topicArn,
+        NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
       },
     });
 

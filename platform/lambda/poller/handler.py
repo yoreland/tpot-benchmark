@@ -253,7 +253,17 @@ def _launch_instance(
 
 
 def _send_notification(title: str, message: str, booking: dict) -> None:
-    """Send notification via SNS."""
+    """Send notification via Feishu webhook (and SNS as fallback)."""
+    from notifications import send_notification
+
+    send_notification(
+        title=title,
+        message=message,
+        event_type="capacity_found",
+        booking_data=booking,
+    )
+
+    # Also publish to SNS as fallback
     if not NOTIFICATION_TOPIC_ARN:
         return
     try:
@@ -265,7 +275,7 @@ def _send_notification(title: str, message: str, booking: dict) -> None:
             Message=full_message,
         )
     except ClientError as e:
-        logger.warning("Failed to send notification: %s", e)
+        logger.warning("Failed to send SNS notification: %s", e)
 
 
 # ─── Lambda Handler ─────────────────────────────────────────────────────────
