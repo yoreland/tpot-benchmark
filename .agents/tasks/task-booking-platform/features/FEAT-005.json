@@ -2,7 +2,7 @@
   "id": "FEAT-005",
   "type": "feat",
   "description": "Instance reuse on booking override: when user confirms override of a conflicting booking that has a running instance (status ready/deploying with instanceId), reuse the existing instance instead of terminating it. Invoke deployer Lambda to switch docker compose deployment.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Modify lambda/api/handler.py create_booking() conflict handling to differentiate between reusable instances (have instanceId) and non-reusable (still polling/launching)",
     "Add DEPLOYER_FUNCTION_NAME env var reading and _invoke_deployer helper to api/handler.py",
@@ -24,5 +24,5 @@
     "cd platform/frontend && npm run build"
   ],
   "blocked_reason": null,
-  "findings": null
+  "findings": "All 15 CDK tests pass. CDK synth succeeds. Frontend builds. Python syntax valid. Used addEnvironment() after deployer creation to avoid circular dependency in CDK. The Booking model already had instanceId/region/az fields, no changes needed to models.py."
 }
