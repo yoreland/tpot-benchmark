@@ -3,11 +3,13 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as path from 'path';
 import { Construct } from 'constructs';
 
 export class TpotBookingStack extends cdk.Stack {
@@ -73,6 +75,15 @@ export class TpotBookingStack extends cdk.Stack {
           ttl: cdk.Duration.minutes(5),
         },
       ],
+    });
+
+    // ─── Frontend Deployment ───────────────────────────────────────────
+
+    new s3deploy.BucketDeployment(this, 'FrontendDeployment', {
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../frontend/dist'))],
+      destinationBucket: frontendBucket,
+      distribution,
+      distributionPaths: ['/*'],
     });
 
     // ─── SSM Parameter for Basic Auth ──────────────────────────────────
