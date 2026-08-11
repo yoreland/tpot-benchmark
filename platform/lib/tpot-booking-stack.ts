@@ -275,6 +275,9 @@ def generate_policy(principal_id, effect, resource):
         'ec2:RequestSpotInstances',
         'ec2:CancelSpotInstanceRequests',
         'ec2:CreateTags',
+        'ec2:DescribeSecurityGroups',
+        'ec2:DescribeSubnets',
+        'ec2:DescribeImages',
       ],
       resources: ['*'],
     }));
@@ -304,6 +307,12 @@ def generate_policy(principal_id, effect, resource):
         'ssm:GetParameters',
       ],
       resources: [`arn:aws:ssm:*:${this.account}:parameter/tpot-booking/*`],
+    }));
+
+    // Allow read-only access to AWS public DLAMI parameters (account segment is empty)
+    capacityPollerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: ['arn:aws:ssm:*::parameter/aws/service/*'],
     }));
 
     capacityPollerRole.addToPolicy(new iam.PolicyStatement({
