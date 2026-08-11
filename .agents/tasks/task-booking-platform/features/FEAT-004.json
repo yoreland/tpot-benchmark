@@ -2,7 +2,7 @@
   "id": "FEAT-004",
   "type": "fix",
   "description": "Add CloudFront API proxy behavior so the frontend can call relative /api paths instead of requiring VITE_API_URL to be baked at build time. Eliminates the post-deploy manual step of rebuilding the frontend with the real API Gateway URL.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Add a second CloudFront origin pointing to the API Gateway endpoint (HttpOrigin with origin path set to the stage /prod)",
     "Add an additional CloudFront behavior for path pattern /api/* that forwards requests to the API Gateway origin, including Authorization header forwarding",
@@ -23,5 +23,5 @@
     "cd platform/frontend && npm run build"
   ],
   "blocked_reason": null,
-  "findings": null
+  "findings": "CloudFront does not allow Authorization header in custom OriginRequestPolicy allowList. Used the managed policy ALL_VIEWER_EXCEPT_HOST_HEADER instead, which forwards all viewer headers including Authorization to the origin. CloudFront Function rewrites /api/* to /{stage}/* before forwarding to API Gateway. All 15 existing tests pass. CDK synth and frontend build both succeed."
 }
