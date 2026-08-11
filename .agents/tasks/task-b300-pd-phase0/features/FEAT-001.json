@@ -1,0 +1,41 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create docker-compose-pd-v4flash-b300.yaml for 3P1D PD disaggregation on B300 (3 prefill engines tp=2 + 1 decode engine tp=2 + sglang-router)",
+  "status": "completed",
+  "steps": [
+    "Create scripts/docker-compose-pd-v4flash-b300.yaml with 5 services: prefill-0 (GPU 0,1, port 30000, bootstrap 9000), prefill-1 (GPU 2,3, port 30100, bootstrap 9100), prefill-2 (GPU 4,5, port 30200, bootstrap 9200), decode-0 (GPU 6,7, port 30300, bootstrap 9300), router (port 30080)",
+    "All engine services use image lmsysorg/sglang:v0.5.17-cu130 (NOT v0.5.12.post1)",
+    "Set SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384 (NOT 8320, proven by c1n server.log ValueError)",
+    "Add timeout env vars: SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800, SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800",
+    "Each engine gets: --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash --tp 2 --moe-a2a-backend megamoe --mem-fraction-static 0.85 --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics --disaggregation-transfer-backend nixl",
+    "Prefill engines get: --disaggregation-mode prefill --disaggregation-bootstrap-port <port> --host 0.0.0.0 --port <port>",
+    "Decode engine gets: --disaggregation-mode decode --disaggregation-bootstrap-port 9300 --host 0.0.0.0 --port 30300",
+    "Do NOT include --enable-dp-attention (proven to cause AssertionError on this model/hardware)",
+    "Router service uses lmsysorg/sglang:v0.5.17-cu130 (same pinned version, not latest), runs: python3 -m sglang_router.launch_router --pd-disaggregation --prefill http://127.0.0.1:30000 9000 --prefill http://127.0.0.1:30100 9100 --prefill http://127.0.0.1:30200 9200 --decode http://127.0.0.1:30300 --host 0.0.0.0 --port 30080 --worker-startup-timeout-secs 2400 --request-timeout-secs 3600",
+    "All services use network_mode: host, ipc: host, shm_size: 16g, volumes mount /opt/dlami/nvme:/opt/dlami/nvme and a jitcache volume to /root/.cache",
+    "Use NVIDIA_VISIBLE_DEVICES env var (not deploy.resources.reservations) for GPU assignment: 0,1 / 2,3 / 4,5 / 6,7",
+    "Add depends_on with service_healthy condition so router starts after all engines",
+    "Add healthcheck to each engine service: curl -sf http://127.0.0.1:<port>/health with appropriate interval/timeout/retries for 30-min cold start",
+    "Add comments at top explaining: this is for on-machine verification, nixl backend must be confirmed working in Phase 2 gate before using this in production"
+  ],
+  "acceptance_criteria": [
+    "File docker-compose-pd-v4flash-b300.yaml exists in scripts/ directory",
+    "YAML is syntactically valid (python3 -c 'import yaml; yaml.safe_load(open(...))')",
+    "Contains exactly 5 services: prefill-0, prefill-1, prefill-2, decode-0, router",
+    "Image is v0.5.17-cu130 for all services (not v0.5.12.post1)",
+    "MEGA_MOE env var is 16384 (not 8320)",
+    "Router --prefill args include bootstrap ports (9000, 9100, 9200)",
+    "No --enable-dp-attention anywhere in the file",
+    "--disaggregation-transfer-backend nixl is present on all engines",
+    "Timeout env vars (WAITING_TIMEOUT=1800, BOOTSTRAP_TIMEOUT=1800) are set"
+  ],
+  "verification": [
+    "python3 -c \"import yaml; y=yaml.safe_load(open('scripts/docker-compose-pd-v4flash-b300.yaml')); assert len(y['services'])==5; print('YAML valid, 5 services')\"",
+    "grep -c 'v0.5.17-cu130' scripts/docker-compose-pd-v4flash-b300.yaml should be >= 5",
+    "grep '16384' scripts/docker-compose-pd-v4flash-b300.yaml should match",
+    "grep 'enable-dp-attention' scripts/docker-compose-pd-v4flash-b300.yaml should NOT match"
+  ],
+  "blocked_reason": null,
+  "findings": "All verification checks pass: YAML valid with 5 services, v0.5.17-cu130 image used 6 times (including router comment), 16384 env var on all 4 engines, nixl on all 4 engines, no enable-dp-attention, no 8320. Project tests all pass (27 cases, 258 assertions). PyYAML was installed for validation."
+}

@@ -1,0 +1,24 @@
+{
+  "project_type": "GPU benchmark infrastructure (bash scripts + python helpers) for DeepSeek-V4-Flash on B300/H200",
+  "language": "bash (primary), python (helpers)",
+  "build_system": "No formal build system. Scripts are self-contained bash. Tests run via tests/run-tests.sh.",
+  "test_framework": "Custom bash test framework in tests/run-tests.sh with stubs in tests/stubs/. Uses DRY_RUN=1 mode and stub PATH injection. Currently 15+ cases / 220+ assertions.",
+  "build_command": "bash -n scripts/b300-run-config.sh && bash -n scripts/poll-b300-h200.sh",
+  "test_command": "bash tests/run-tests.sh",
+  "verification_instructions": "1) bash -n all modified scripts, 2) run tests/run-tests.sh and confirm all cases pass, 3) manual review of docker-compose YAML validity",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "No setup needed - pure bash scripts with python3 for JSON manipulation. Stubs mock all external deps.",
+  "environment_constraints": "OPEN_INTERNET mode. No GPU, no AWS credentials needed for Phase 0 (scripts + tests only). Docker not available in sandbox for compose validation but YAML structure can be validated.",
+  "contribution_requirements": "From plan review doc: corrections must match proven values from S3 logs. SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384 (not 8320) for v0.5.17. Router --prefill must include bootstrap port. No --enable-dp-attention. Transfer backend must be nixl.",
+  "key_patterns": "b300-run-config.sh: resolve_config() case statement sets CONFIG_DESC, CONFIG_ENV_ARGS, CONFIG_SERVE_ARGS, CONFIG_IMAGE. Single CONTAINER variable, single HEALTH_URL. poll-b300-h200.sh: SUBNET_MAP associative array, TARGETS array with 'type region az maxprice recipe' format.",
+  "relevant_files": [
+    "scripts/b300-run-config.sh",
+    "scripts/poll-b300-h200.sh",
+    "scripts/recipes/b300-tp2-dp2-fp4-megamoe.env",
+    "docs/b300-pd-3p1d-plan-review.md",
+    "docs/b300-live-instance.md",
+    "tests/run-tests.sh",
+    "tests/stubs/"
+  ],
+  "directory_structure": "scripts/ - main automation scripts and recipes/ subfolder. tests/ - run-tests.sh + stubs/ + fixtures/. docs/ - run summaries and operational docs. results/ - benchmark output. infra/ - lambda + deploy scripts."
+}

@@ -1,0 +1,47 @@
+# docker-compose-tp4-h200.yaml
+# H200 tp=4（SGLang cookbook 给 H200 的处方值）+ EAGLE
+# Target: p5en.48xlarge (8x H200 141GB), DeepSeek-V4-Flash
+# Purpose: docker-compose-tp8-h200.yaml 的回退方案
+#
+# cookbook 依据：DeepSeek-V4-Flash 单机可服务 B200/B300/GB200/GB300/H200 (TP=4)，
+# 且 Hopper 的原始 FP4 checkpoint 走 W4A16 Marlin，TP-only（不能开 dp-attention）。
+#
+# 注意：tp=4 只用 4 张卡（0-3），另外 4 张空闲。这不是「整机」部署，
+# 报告里必须如实标注实际使用的 GPU 数，否则性价比对比会失真。
+#
+# 对外端口统一 30080。
+
+volumes:
+  jitcache:
+
+services:
+  sglang-h200:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    runtime: nvidia
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - jitcache:/root/.cache
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0,1,2,3"
+    restart: "no"
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash
+      --tp 4
+      --moe-runner-backend marlin
+      --mem-fraction-static 0.85
+      --trust-remote-code
+      --cuda-graph-max-bs 64
+      --enable-metrics
+      --speculative-algorithm EAGLE --speculative-num-steps 3
+      --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
+      --host 0.0.0.0 --port 30080
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s

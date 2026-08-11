@@ -161,14 +161,16 @@ cp "$LAMBDA_SRC/handler.py" "$WORK_DIR/handler.py"
 mkdir -p "$WORK_DIR/recipes"
 cp "$REPO_ROOT/scripts/bootstrap/bench-bootstrap.sh" "$WORK_DIR/bench-bootstrap.sh"
 cp "$REPO_ROOT/scripts/recipes/h200-tp4-fp4-eagle.env" "$WORK_DIR/recipes/h200-tp4-fp4-eagle.env"
-cp "$REPO_ROOT/scripts/recipes/b300-tp2-dp2-fp4-megamoe.env" "$WORK_DIR/recipes/b300-tp2-dp2-fp4-megamoe.env"
+cp "$REPO_ROOT/scripts/recipes/b300-pd-hold.env" "$WORK_DIR/recipes/b300-pd-hold.env"
+cp "$REPO_ROOT/scripts/recipes/h200-hold.env" "$WORK_DIR/recipes/h200-hold.env"
 
 # Create zip
 (cd "$WORK_DIR" && zip -r "$ZIP_FILE" \
     handler.py \
     bench-bootstrap.sh \
     recipes/h200-tp4-fp4-eagle.env \
-    recipes/b300-tp2-dp2-fp4-megamoe.env)
+    recipes/b300-pd-hold.env \
+    recipes/h200-hold.env)
 
 ZIP_SIZE=$(wc -c < "$ZIP_FILE" | tr -d ' ')
 log "  Lambda zip: $ZIP_FILE ($ZIP_SIZE bytes)"
@@ -195,7 +197,7 @@ if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" >
         --function-name "$FUNCTION_NAME" \
         --timeout 120 \
         --memory-size 256 \
-        --environment "Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN,EVENTBRIDGE_RULE_NAME=$RULE_NAME}" \
+        --environment "Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN,EVENTBRIDGE_RULE_NAME=$RULE_NAME,SKIP_INSTANCE_TYPES=${SKIP_INSTANCE_TYPES:-}}" \
         --query 'FunctionArn' --output text >/dev/null
     log "  Updated function configuration"
     FUNCTION_ARN=$(aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" \
@@ -211,7 +213,7 @@ else
         --timeout 120 \
         --memory-size 256 \
         --zip-file "fileb://$ZIP_FILE" \
-        --environment "Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN,EVENTBRIDGE_RULE_NAME=$RULE_NAME}" \
+        --environment "Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN,EVENTBRIDGE_RULE_NAME=$RULE_NAME,SKIP_INSTANCE_TYPES=${SKIP_INSTANCE_TYPES:-}}" \
         --query 'FunctionArn' --output text)
     log "  Created function: $FUNCTION_ARN"
 

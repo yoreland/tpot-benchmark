@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-002",
+  "type": "fix",
+  "description": "Fix capacity poller to include us-west-2b (the AZ where B300 was previously acquired) and add PD config to b300-run-config.sh",
+  "status": "completed",
+  "steps": [
+    "In scripts/poll-b300-h200.sh, add us-west-2b to SUBNET_MAP: SUBNET_MAP[\"us-west-2b\"]=\"subnet-0594a48bad1aef4a6\"",
+    "In scripts/poll-b300-h200.sh, add two new entries to TARGETS array (one for H200, one for B300) for us-west-2b, inserted alongside the other us-west-2 entries: 'p5en.48xlarge us-west-2 us-west-2b 35 scripts/recipes/h200-tp4-fp4-eagle.env' and 'p6-b300.48xlarge us-west-2 us-west-2b 60 scripts/recipes/b300-tp2-dp2-fp4-megamoe.env'",
+    "Update the log line in the main loop that lists regions to include us-west-2b: change 'us-west-2 (2a,2c,2d)' to 'us-west-2 (2a,2b,2c,2d)'",
+    "In scripts/b300-run-config.sh, add a new config 'pd-3p1d-nixl' in the resolve_config() case statement (after c1b-tp8-megamoe-noeagle, before the *) wildcard)",
+    "The pd-3p1d-nixl config needs a fundamentally different approach since PD requires multiple engines + router, not a single container. Set CONFIG_DESC to describe 3P1D with nixl transfer. Set CONFIG_IMAGE to v0.5.17-cu130. Set CONFIG_ENV_ARGS with -e SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384 -e SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800 -e SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800. Set CONFIG_SERVE_ARGS to a special marker value '--pd-compose' that the launch step can detect to use docker compose instead of docker run.",
+    "Add the pd-3p1d-nixl config to the list_configs_indented() function with appropriate description",
+    "Add a comment block above the new config explaining that this config uses docker-compose-pd-v4flash-b300.yaml instead of single-container docker run, and the launch/readiness/bench steps will need to handle this differently (Phase 1+ work)"
+  ],
+  "acceptance_criteria": [
+    "scripts/poll-b300-h200.sh contains SUBNET_MAP[\"us-west-2b\"]=\"subnet-0594a48bad1aef4a6\"",
+    "TARGETS array has entries for us-west-2b (both p5en and p6-b300)",
+    "bash -n scripts/poll-b300-h200.sh passes",
+    "scripts/b300-run-config.sh contains pd-3p1d-nixl config case",
+    "The new config uses v0.5.17-cu130 image and 16384 env var",
+    "bash -n scripts/b300-run-config.sh passes",
+    "list_configs_indented includes pd-3p1d-nixl"
+  ],
+  "verification": [
+    "bash -n scripts/poll-b300-h200.sh && echo 'poller syntax OK'",
+    "bash -n scripts/b300-run-config.sh && echo 'run-config syntax OK'",
+    "grep 'us-west-2b' scripts/poll-b300-h200.sh | wc -l should be >= 3 (subnet + 2 targets)",
+    "grep 'pd-3p1d-nixl' scripts/b300-run-config.sh | wc -l should be >= 2 (case + list)"
+  ],
+  "blocked_reason": null,
+  "findings": "All changes verified: bash -n passes on both scripts, grep confirms us-west-2b appears 3 times in poller (subnet + 2 targets), pd-3p1d-nixl appears 2 times in run-config (case + list). All 27 test cases / 258 assertions pass."
+}

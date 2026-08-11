@@ -68,21 +68,21 @@ TARGETS = [
         "max_price": "35",
         "region": "us-east-1",
         "azs": ["us-east-1a", "us-east-1c"],
-        "recipe_file": "recipes/h200-tp4-fp4-eagle.env",
+        "recipe_file": "recipes/h200-hold.env",
     },
     {
         "instance_type": "p5en.48xlarge",
         "max_price": "35",
         "region": "us-east-2",
         "azs": ["us-east-2a", "us-east-2b", "us-east-2c"],
-        "recipe_file": "recipes/h200-tp4-fp4-eagle.env",
+        "recipe_file": "recipes/h200-hold.env",
     },
     {
         "instance_type": "p5en.48xlarge",
         "max_price": "35",
         "region": "us-west-2",
         "azs": ["us-west-2a", "us-west-2c", "us-west-2d"],
-        "recipe_file": "recipes/h200-tp4-fp4-eagle.env",
+        "recipe_file": "recipes/h200-hold.env",
     },
     # B300 targets (p6-b300.48xlarge)
     {
@@ -90,14 +90,14 @@ TARGETS = [
         "max_price": "60",
         "region": "us-east-1",
         "azs": ["us-east-1a"],
-        "recipe_file": "recipes/b300-tp2-dp2-fp4-megamoe.env",
+        "recipe_file": "recipes/b300-pd-hold.env",
     },
     {
         "instance_type": "p6-b300.48xlarge",
         "max_price": "60",
         "region": "us-west-2",
         "azs": ["us-west-2a", "us-west-2b"],
-        "recipe_file": "recipes/b300-tp2-dp2-fp4-megamoe.env",
+        "recipe_file": "recipes/b300-pd-hold.env",
     },
 ]
 
