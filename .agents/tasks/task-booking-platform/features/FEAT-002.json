@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "feat",
   "description": "Backend Lambda API handlers: booking CRUD, capacity polling with booking integration, deployment orchestration, IP whitelist management, notification dispatch (email + Feishu webhook). This is the core business logic.",
-  "status": "pending",
+  "status": "in_progress",
   "steps": [
     "Create platform/lambda/ directory for Python Lambda handlers",
     "Create platform/lambda/api/handler.py: API Gateway Lambda handler with routes: POST /bookings (create booking), GET /bookings (list with status filter), GET /bookings/{id} (get details), DELETE /bookings/{id} (cancel/terminate), PUT /bookings/{id}/whitelist (update IP whitelist), GET /deployments (list available deployment plans derived from ../scripts/recipes/ and compose files), GET /instances (list running instances from EC2 describe-instances with Project=tpot-benchmark tag), PUT /notifications (configure email/Feishu webhook settings)",

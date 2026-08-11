@@ -223,20 +223,8 @@ def generate_policy(principal_id, effect, resource):
     const apiHandler = new lambda.Function(this, 'ApiHandler', {
       functionName: 'tpot-booking-api-handler',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'index.handler',
-      code: lambda.Code.fromInline(`
-import json
-
-def handler(event, context):
-    return {
-        'statusCode': 200,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-        },
-        'body': json.dumps({'message': 'T-POT Booking API placeholder'})
-    }
-`),
+      handler: 'handler.handler',
+      code: lambda.Code.fromAsset('./lambda/api'),
       role: apiHandlerRole,
       timeout: cdk.Duration.seconds(30),
       environment: {
@@ -303,16 +291,8 @@ def handler(event, context):
     const capacityPoller = new lambda.Function(this, 'CapacityPoller', {
       functionName: 'tpot-booking-capacity-poller',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'index.handler',
-      code: lambda.Code.fromInline(`
-import json
-
-def handler(event, context):
-    return {
-        'statusCode': 200,
-        'body': json.dumps({'message': 'Capacity poller placeholder'})
-    }
-`),
+      handler: 'handler.handler',
+      code: lambda.Code.fromAsset('./lambda/poller'),
       role: capacityPollerRole,
       timeout: cdk.Duration.minutes(5),
       environment: {
@@ -374,16 +354,8 @@ def handler(event, context):
     const deployer = new lambda.Function(this, 'DeployerFunction', {
       functionName: 'tpot-booking-deployer',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'index.handler',
-      code: lambda.Code.fromInline(`
-import json
-
-def handler(event, context):
-    return {
-        'statusCode': 200,
-        'body': json.dumps({'message': 'Deployer placeholder'})
-    }
-`),
+      handler: 'handler.handler',
+      code: lambda.Code.fromAsset('./lambda/deployer'),
       role: deployerRole,
       timeout: cdk.Duration.minutes(10),
       environment: {
