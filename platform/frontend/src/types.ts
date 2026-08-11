@@ -35,8 +35,9 @@ export interface NotificationConfig {
 }
 
 export interface ConflictResponse {
+  error: string;
   message: string;
-  conflicting_booking: Booking;
+  conflicting: Booking[];
 }
 
 export interface StatusResponse {

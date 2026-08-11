@@ -104,7 +104,7 @@ const BookingPage: React.FC = () => {
         cancelText="取消"
         okButtonProps={{ danger: true }}
       >
-        {conflictData && (
+        {conflictData && conflictData.conflicting.length > 0 && (
           <div>
             <Text type="warning" style={{ fontSize: 14 }}>
               {conflictData.message}
@@ -116,19 +116,19 @@ const BookingPage: React.FC = () => {
               size="small"
             >
               <Descriptions.Item label="预约ID">
-                {conflictData.conflicting_booking.bookingId}
+                {conflictData.conflicting[0].bookingId}
               </Descriptions.Item>
               <Descriptions.Item label="机型">
-                {conflictData.conflicting_booking.instanceType}
+                {conflictData.conflicting[0].instanceType}
               </Descriptions.Item>
               <Descriptions.Item label="当前方案">
-                {conflictData.conflicting_booking.deploymentPlanName}
+                {conflictData.conflicting[0].deploymentPlanName}
               </Descriptions.Item>
               <Descriptions.Item label="状态">
-                {conflictData.conflicting_booking.status}
+                {conflictData.conflicting[0].status}
               </Descriptions.Item>
             </Descriptions>
-            {conflictData.conflicting_booking.instanceId ? (
+            {conflictData.conflicting[0].instanceId ? (
               <Text
                 type="success"
                 style={{ display: 'block', marginTop: 16 }}
