@@ -129,19 +129,25 @@ def create_booking(body: dict) -> dict:
             KeyConditionExpression=(
                 boto3.dynamodb.conditions.Key("instanceType").eq(instance_type)
             ),
-            FilterExpression=boto3.dynamodb.conditions.Attr("status").is_in(
-                [
-                    BookingStatus.POLLING.value,
-                    BookingStatus.LAUNCHING.value,
-                    BookingStatus.DEPLOYING.value,
-                    BookingStatus.READY.value,
-                ]
-            ),
         )
-        conflicting = conflict_resp.get("Items", [])
+        # Filter active statuses in application code since `status` is the
+        # sort key of the GSI and cannot appear in FilterExpression.
+        active_statuses = {
+            BookingStatus.POLLING.value,
+            BookingStatus.LAUNCHING.value,
+            BookingStatus.DEPLOYING.value,
+            BookingStatus.READY.value,
+        }
+        conflicting = [
+            item for item in conflict_resp.get("Items", [])
+            if item.get("status") in active_statuses
+        ]
     except ClientError as e:
         logger.error("Error querying conflicts: %s", e)
-        conflicting = []
+        return _response(500, {
+            "error": "Failed to check for conflicts. Please retry.",
+            "detail": str(e),
+        })
 
     if conflicting and not confirm_override:
         # Return 409 with conflict details
