@@ -322,6 +322,7 @@ def generate_policy(principal_id, effect, resource):
         BOOKING_TABLE: bookingTable.tableName,
         NOTIFICATION_TOPIC_ARN: notificationTopic.topicArn,
         NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
+        MODEL_NAME: this.node.tryGetContext('modelName') ?? 'deepseek-ai/DeepSeek-V4-Flash',
       },
     });
 

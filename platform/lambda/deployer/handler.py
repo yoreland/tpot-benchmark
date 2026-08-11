@@ -43,10 +43,9 @@ SSM_COMMAND_TIMEOUT = 3600  # seconds for the long-running deploy command (1 hou
 HEALTH_CHECK_TIMEOUT = 180  # seconds to wait for service health after command completes
 HEALTH_CHECK_INTERVAL = 15  # seconds between health checks
 
-# S3 model mirror settings
-ACCOUNT_ID = "077090643075"
-MODEL_S3_PREFIX = "checkpoints/deepseek-ai__DeepSeek-V4-Flash"
-MODEL_LOCAL_PATH = "/opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash"
+# Model settings
+MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-ai/DeepSeek-V4-Flash")
+MODEL_LOCAL_PATH = f"/opt/dlami/nvme/models/{MODEL_NAME.replace('/', '__')}"
 
 # Path to bundled compose files (packaged with the Lambda)
 COMPOSE_FILES_DIR = Path(__file__).parent / "compose-files"
@@ -249,12 +248,12 @@ def _load_compose_content(compose_file: str) -> str:
     return ""
 
 
-def _get_compose_commands(deployment_plan: str, compose_file: str, region: str) -> list:
+def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
     """Generate the full deployment commands including model download.
 
     The command sequence is:
       1. NVMe RAID setup
-      2. Model directory creation + S3 sync (159GB weights, ~10-30 min)
+      2. Model directory creation + HuggingFace download
       3. docker compose pull (47GB image, ~5-15 min)
       4. docker compose up -d
       5. Done marker
@@ -269,9 +268,6 @@ def _get_compose_commands(deployment_plan: str, compose_file: str, region: str) 
             f"echo 'ERROR: compose file {compose_file} not found in Lambda bundle' >&2",
             "exit 1",
         ]
-
-    s3_bucket = f"tpot-bench-results-{ACCOUNT_ID}-{region}"
-    s3_model_uri = f"s3://{s3_bucket}/{MODEL_S3_PREFIX}/"
 
     commands = [
         "#!/bin/bash",
@@ -299,7 +295,7 @@ def _get_compose_commands(deployment_plan: str, compose_file: str, region: str) 
         "    echo 'NVMe RAID mounted at /mnt/nvme'",
         "  fi",
         "fi",
-        # ─── Step 2: Model directory + S3 sync ─────────────────────────
+        # ─── Step 2: Model directory + HuggingFace download ────────────
         "echo '=== Step 2: Model weight download ==='",
         "mkdir -p /opt/dlami/nvme/models",
         "# If NVMe is mounted, use it for model storage and symlink",
@@ -309,18 +305,10 @@ def _get_compose_commands(deployment_plan: str, compose_file: str, region: str) 
         "  ln -sf /mnt/nvme/models /opt/dlami/nvme/models",
         "  echo 'Using NVMe storage for models via symlink'",
         "fi",
-        f"echo 'Downloading model weights from S3: {s3_model_uri}'",
-        f"if aws s3 sync {s3_model_uri} {MODEL_LOCAL_PATH}/ --region {region}; then",
-        "  echo 'Model download from S3 completed successfully'",
-        "else",
-        "  echo 'S3 sync failed, falling back to HuggingFace download...'",
-        "  pip install -q huggingface_hub",
-        "  python3 -c \"",
-        "from huggingface_hub import snapshot_download",
-        f"snapshot_download('deepseek-ai/DeepSeek-V4-Flash', local_dir='{MODEL_LOCAL_PATH}')",
-        "\"",
-        "  echo 'Model download from HuggingFace completed'",
-        "fi",
+        f"echo 'Downloading model weights from HuggingFace: {MODEL_NAME}'",
+        "pip3 install -q huggingface_hub",
+        f"python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('{MODEL_NAME}', local_dir='{MODEL_LOCAL_PATH}')\"",
+        "echo 'Model download from HuggingFace completed'",
         # ─── Step 3: Docker compose pull ───────────────────────────────
         "echo '=== Step 3: Docker compose pull ==='",
         "cd /opt/tpot-bench/scripts",
@@ -458,7 +446,7 @@ def _handle_deploy(event):
         return {"statusCode": 500, "body": "SSM timeout"}
 
     # Generate deployment commands (now includes model download)
-    commands = _get_compose_commands(deployment_plan, compose_file, region)
+    commands = _get_compose_commands(deployment_plan, compose_file)
 
     # Send the long-running command (does NOT wait for completion)
     command_id = _send_deploy_command(ssm_client, instance_id, commands, timeout=SSM_COMMAND_TIMEOUT)
