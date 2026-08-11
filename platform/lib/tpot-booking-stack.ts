@@ -182,11 +182,6 @@ def generate_policy(principal_id, effect, resource):
         authorizer,
         authorizationType: apigateway.AuthorizationType.CUSTOM,
       },
-      defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
-        allowMethods: apigateway.Cors.ALL_METHODS,
-        allowHeaders: ['Content-Type', 'Authorization'],
-      },
     });
 
     // ─── Lambda Functions (Placeholders) ───────────────────────────────
@@ -463,6 +458,38 @@ def generate_policy(principal_id, effect, resource):
     // /status resource
     const status = api.root.addResource('status');
     status.addMethod('GET', apiIntegration);
+
+    // ─── CloudFront API Proxy ──────────────────────────────────────────
+    // Add /api/* behavior to CloudFront so the frontend can call relative paths
+    // instead of requiring VITE_API_URL to be baked at build time.
+    // A CloudFront Function rewrites /api/bookings -> /prod/bookings before
+    // forwarding to the API Gateway origin.
+
+    const apiGatewayOrigin = new origins.HttpOrigin(
+      `${api.restApiId}.execute-api.${this.region}.amazonaws.com`,
+    );
+
+    const apiRewriteFunction = new cloudfront.Function(this, 'ApiRewriteFunction', {
+      functionName: 'tpot-booking-api-rewrite',
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  request.uri = request.uri.replace(/^\\/api/, '/${api.deploymentStage.stageName}');
+  return request;
+}
+`),
+    });
+
+    distribution.addBehavior('/api/*', apiGatewayOrigin, {
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      functionAssociations: [{
+        function: apiRewriteFunction,
+        eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+      }],
+    });
 
     // ─── CDK Outputs ───────────────────────────────────────────────────
 

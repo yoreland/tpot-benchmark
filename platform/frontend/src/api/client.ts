@@ -5,7 +5,7 @@ import type {
   StatusResponse,
 } from '../types';
 
-const BASE_URL = import.meta.env.VITE_API_URL || '';
+const BASE_URL = '/api';
 
 function getAuthHeader(): string {
   const creds = sessionStorage.getItem('gpu_console_credentials');
