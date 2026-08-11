@@ -1,0 +1,34 @@
+{
+  "model": "openai.gpt-5.6-luna",
+  "mode": "streaming",
+  "per_task": {
+    "长文生成-架构": {
+      "ttft_p50": 1.114,
+      "tpot_p50_ms": 6.08,
+      "e2e_p50": 11.79,
+      "out_mean": 996,
+      "deltas": 939
+    },
+    "长文生成-对比": {
+      "ttft_p50": 1.063,
+      "tpot_p50_ms": 5.8,
+      "e2e_p50": 11.08,
+      "out_mean": 921,
+      "deltas": 874
+    },
+    "长文生成-中文": {
+      "ttft_p50": 0.892,
+      "tpot_p50_ms": 6.01,
+      "e2e_p50": 9.84,
+      "out_mean": 658,
+      "deltas": 613
+    }
+  },
+  "overall": {
+    "calls": 9,
+    "ttft_p50_s": 1.066,
+    "tpot_p50_ms": 6.01,
+    "e2e_p50_s": 11.08,
+    "out_mean": 858.6
+  }
+}

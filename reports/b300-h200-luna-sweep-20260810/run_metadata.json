@@ -1,0 +1,30 @@
+{
+  "run_id": "b300-h200-luna-sweep-20260810",
+  "date": "2026-08-10",
+  "model": "deepseek-ai/DeepSeek-V4-Flash",
+  "managed_model": "openai.gpt-5.6-luna (Bedrock Mantle us-east-1)",
+  "spec": {
+    "random_input": 40000,
+    "random_output": 1500,
+    "random_range_ratio": 1.0,
+    "speculative": "EAGLE 3/1/4",
+    "acceptance": { "tpot_p50_ms": 4.5, "ttft_p50_s": 1.7 }
+  },
+  "image": "lmsysorg/sglang:v0.5.17-cu130",
+  "configs": ["b300-tp8", "b300-2p2d", "b300-3p1d", "h200-tp8", "gpt56-luna"],
+  "concurrency": [1, 4, 8, 16, 32],
+  "instances": {
+    "b300": "i-01ac85bde661e57f8 (p6-b300.48xlarge, us-west-2, terminated 2026-08-10 11:36)",
+    "h200": "i-04bf3b9d70107c447 (8xH200, us-west-2, terminated after run)"
+  },
+  "results_source": {
+    "b300_sweep": "s3://tpot-bench-results-077090643075-us-west-2/runs/b300-sweep40k/",
+    "h200_sweep": "reconstructed from live SSM metrics (raw jsonl lost on instance termination)",
+    "luna": "local streaming benchmark, aligned 40K/1.5K"
+  },
+  "summary": {
+    "tpot_p50_ms_c32": { "b300_tp8": 16.66, "b300_2p2d": 5.66, "b300_3p1d": 6.99, "h200_tp8": 34.32 },
+    "luna_aligned_40k_1500": { "ttft_p50_s": 1.39, "tpot_p50_ms": 5.79, "e2e_p50_s": 14.91, "out_tokens": 1467 },
+    "recommendation": "low-concurrency->B300 tp=8; high-concurrency->B300 2P2D; managed/no-ops->Luna; drop 3P1D and H200 tp=8"
+  }
+}

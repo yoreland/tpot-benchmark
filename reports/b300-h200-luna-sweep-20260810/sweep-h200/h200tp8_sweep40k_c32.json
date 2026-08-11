@@ -1,0 +1,16 @@
+{
+  "max_concurrency": 32,
+  "backend": "sglang",
+  "dataset": "random",
+  "random_input": 40000,
+  "random_output": 1500,
+  "random_range_ratio": 1.0,
+  "median_tpot_ms": 34.32,
+  "p95_tpot_ms": 44.77,
+  "p99_tpot_ms": 58.38,
+  "median_ttft_ms": 2523,
+  "p95_ttft_ms": 26218,
+  "median_e2e_latency_ms": 54242,
+  "output_throughput": 869,
+  "_note": "reconstructed from live SSM metrics; raw jsonl lost when instance i-04bf3b9d70107c447 terminated"
+}

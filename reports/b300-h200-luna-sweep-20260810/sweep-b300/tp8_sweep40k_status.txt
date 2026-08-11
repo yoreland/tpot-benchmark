@@ -1,0 +1,5 @@
+c=1 OK
+c=4 OK
+c=8 OK
+c=16 OK
+c=32 OK
