@@ -54,6 +54,18 @@ COMPOSE_FILES_DIR = Path(__file__).parent / "compose-files"
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 
+def _terminate_instance(instance_id: str, region: str) -> None:
+    """Terminate an EC2 instance to stop billing."""
+    if not instance_id or not region:
+        return
+    try:
+        ec2 = boto3.client("ec2", region_name=region)
+        ec2.terminate_instances(InstanceIds=[instance_id])
+        logger.info("Terminated instance %s in %s", instance_id, region)
+    except ClientError as e:
+        logger.error("Failed to terminate instance %s: %s", instance_id, e)
+
+
 def _get_booking_by_id(booking_id: str) -> dict:
     """Fetch a booking directly by its ID."""
     dynamodb = boto3.resource("dynamodb")
@@ -464,10 +476,11 @@ def _handle_deploy(event):
         _update_booking_status(booking_id, "failed")
         _send_notification(
             f"Deployment failed: {deployment_plan}",
-            f"Instance {instance_id} did not become SSM-reachable",
+            f"Instance {instance_id} did not become SSM-reachable. 实例已自动终止，避免继续计费",
             booking,
             event_type="ssm_not_reachable",
         )
+        _terminate_instance(instance_id, region)
         return {"statusCode": 500, "body": "SSM timeout"}
 
     # Generate deployment commands (now includes model download)
@@ -480,10 +493,11 @@ def _handle_deploy(event):
         _update_booking_status(booking_id, "failed")
         _send_notification(
             f"Deployment failed: {deployment_plan}",
-            f"Failed to send SSM deploy command to {instance_id}",
+            f"Failed to send SSM deploy command to {instance_id}. 实例已自动终止，避免继续计费",
             booking,
             event_type="ssm_command_send_failed",
         )
+        _terminate_instance(instance_id, region)
         return {"statusCode": 500, "body": "Failed to send SSM command"}
 
     # Store command_id and update status to deploying
@@ -538,10 +552,11 @@ def _handle_check_progress():
             _update_booking_status(booking_id, "failed")
             _send_notification(
                 f"Deployment failed: {deployment_plan}",
-                f"Booking {booking_id} missing command tracking data",
+                f"Booking {booking_id} missing command tracking data. 实例已自动终止，避免继续计费",
                 booking,
                 event_type="missing_command_data",
             )
+            _terminate_instance(instance_id, region)
             results.append({"bookingId": booking_id, "result": "failed_no_data"})
             continue
 
@@ -561,10 +576,11 @@ def _handle_check_progress():
             _update_booking_status(booking_id, "failed")
             _send_notification(
                 f"Deployment failed: {deployment_plan}",
-                f"SSM deploy command failed on {instance_id} (command: {command_id})",
+                f"SSM deploy command failed on {instance_id} (command: {command_id}). 实例已自动终止，避免继续计费",
                 booking,
                 event_type="deploy_command_failed",
             )
+            _terminate_instance(instance_id, region)
             results.append({"bookingId": booking_id, "result": "failed"})
             continue
 
@@ -617,10 +633,11 @@ def _handle_check_progress():
                     _update_booking_status(booking_id, "failed")
                     _send_notification(
                         f"Deployment failed: {deployment_plan}",
-                        f"Service on {instance_id} did not become healthy after {int(elapsed)}s (max {MAX_HEALTH_WAIT}s)",
+                        f"Service on {instance_id} did not become healthy after {int(elapsed)}s (max {MAX_HEALTH_WAIT}s). 实例已自动终止，避免继续计费",
                         booking,
                         event_type="health_check_timeout",
                     )
+                    _terminate_instance(instance_id, region)
                     results.append({"bookingId": booking_id, "result": "failed_health"})
                     continue
 

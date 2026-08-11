@@ -268,6 +268,7 @@ def generate_policy(principal_id, effect, resource):
     deployerRole.addToPolicy(new iam.PolicyStatement({
       actions: [
         'ec2:DescribeInstances',
+        'ec2:TerminateInstances',
         'ec2:AuthorizeSecurityGroupIngress',
         'ec2:RevokeSecurityGroupIngress',
         'ec2:DescribeSecurityGroups',
@@ -445,6 +446,61 @@ def generate_policy(principal_id, effect, resource):
       targets: [new targets.LambdaFunction(deployer, {
         event: events.RuleTargetInput.fromObject({ action: 'check_progress' }),
       })],
+    });
+
+    // ─── Orphan Instance Cleaner Lambda ────────────────────────────────
+
+    const orphanCleanerRole = new iam.Role(this, 'OrphanCleanerRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
+    });
+
+    orphanCleanerRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'ec2:DescribeInstances',
+        'ec2:TerminateInstances',
+      ],
+      resources: ['*'],
+    }));
+
+    orphanCleanerRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:Scan',
+      ],
+      resources: [
+        bookingTable.tableArn,
+        `${bookingTable.tableArn}/index/*`,
+      ],
+    }));
+
+    orphanCleanerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'],
+      resources: [notificationConfigTable.tableArn],
+    }));
+
+    const orphanCleaner = new lambda.Function(this, 'OrphanCleanerFunction', {
+      functionName: 'tpot-booking-orphan-cleaner',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'handler.handler',
+      code: lambda.Code.fromAsset('./lambda/orphan-cleaner'),
+      role: orphanCleanerRole,
+      timeout: cdk.Duration.minutes(5),
+      environment: {
+        BOOKING_TABLE: bookingTable.tableName,
+        NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
+        REGIONS: 'us-east-1,us-east-2,us-west-2',
+      },
+    });
+
+    // Schedule rule to trigger orphan cleaner every 15 minutes
+    new events.Rule(this, 'OrphanCleanerSchedule', {
+      ruleName: 'tpot-booking-orphan-cleaner-schedule',
+      description: 'Trigger orphan cleaner Lambda every 15 minutes to clean up orphan instances',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+      targets: [new targets.LambdaFunction(orphanCleaner)],
     });
 
     // ─── EC2 Instance Profile for SSM ──────────────────────────────────
