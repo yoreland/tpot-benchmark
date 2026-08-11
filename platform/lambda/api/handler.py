@@ -223,6 +223,20 @@ def create_booking(body: dict) -> dict:
 
     table.put_item(Item=booking.to_dict())
 
+    # If reusing instance, update EC2 tags to point to new booking
+    if reuse_instance_id:
+        try:
+            ec2 = boto3.client("ec2", region_name=reuse_region)
+            ec2.create_tags(
+                Resources=[reuse_instance_id],
+                Tags=[
+                    {"Key": "BookingId", "Value": booking.bookingId},
+                    {"Key": "DeploymentPlan", "Value": deployment_plan_id},
+                ],
+            )
+        except ClientError as e:
+            logger.warning("Failed to update instance tags: %s", e)
+
     # If reusing instance, invoke deployer to switch deployment
     if reuse_instance_id:
         _invoke_deployer(reuse_instance_id, booking.bookingId)

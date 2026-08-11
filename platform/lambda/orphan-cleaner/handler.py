@@ -124,7 +124,7 @@ def _scan_and_cleanup_region(region: str) -> list:
             booking_id = tags.get("BookingId", "")
             runtime_seconds = _get_instance_runtime_seconds(instance)
 
-            reason = _should_terminate(booking_id, runtime_seconds)
+            reason = _should_terminate(booking_id, runtime_seconds, instance_id)
             if reason:
                 logger.info(
                     "Terminating orphan instance %s in %s (reason: %s, booking: %s)",
@@ -155,11 +155,36 @@ def _scan_and_cleanup_region(region: str) -> list:
     return terminated
 
 
-def _should_terminate(booking_id: str, runtime_seconds: float) -> str:
+def _has_active_booking_for_instance(instance_id: str) -> bool:
+    """Check if any active booking references this instance (reverse lookup)."""
+    if not instance_id:
+        return False
+    try:
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(BOOKING_TABLE)
+        resp = table.scan(
+            FilterExpression=(
+                boto3.dynamodb.conditions.Attr("instanceId").eq(instance_id)
+                & boto3.dynamodb.conditions.Attr("status").is_in(
+                    ["deploying", "launching", "ready", "polling"]
+                )
+            )
+        )
+        return len(resp.get("Items", [])) > 0
+    except ClientError as e:
+        logger.error("Failed reverse lookup for instance %s: %s", instance_id, e)
+        return True  # Fail-safe: don't terminate if we can't confirm
+
+
+def _should_terminate(booking_id: str, runtime_seconds: float, instance_id: str = "") -> str:
     """Determine if an instance should be terminated.
 
     Returns the reason string if it should be terminated, empty string otherwise.
     """
+    # Grace period: never terminate instances running less than 10 minutes
+    if runtime_seconds < 600:
+        return ""
+
     if not booking_id:
         # No booking tag at all - if running over 4 hours, terminate
         if runtime_seconds > MAX_RUNTIME_WITHOUT_READY:
@@ -169,15 +194,27 @@ def _should_terminate(booking_id: str, runtime_seconds: float) -> str:
     booking = _get_booking(booking_id)
 
     if not booking:
-        return f"关联 booking {booking_id} 不存在"
+        reason = f"关联 booking {booking_id} 不存在"
+        if _has_active_booking_for_instance(instance_id):
+            logger.info("Instance %s has active booking via reverse lookup, skipping termination", instance_id)
+            return ""
+        return reason
 
     status = booking.get("status", "")
 
     if status == "failed":
-        return f"关联 booking 已失败"
+        reason = f"关联 booking 已失败"
+        if _has_active_booking_for_instance(instance_id):
+            logger.info("Instance %s has active booking via reverse lookup, skipping termination", instance_id)
+            return ""
+        return reason
 
     if status == "terminated":
-        return f"关联 booking 已终止"
+        reason = f"关联 booking 已终止"
+        if _has_active_booking_for_instance(instance_id):
+            logger.info("Instance %s has active booking via reverse lookup, skipping termination", instance_id)
+            return ""
+        return reason
 
     if status == "ready":
         # Active booking in ready state - do not terminate
