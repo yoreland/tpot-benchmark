@@ -45,6 +45,7 @@ NOTIFICATION_CONFIG_TABLE = os.environ.get(
     "NOTIFICATION_CONFIG_TABLE", "TpotNotificationConfigTable"
 )
 NOTIFICATION_TOPIC_ARN = os.environ.get("NOTIFICATION_TOPIC_ARN", "")
+DEPLOYER_FUNCTION_NAME = os.environ.get("DEPLOYER_FUNCTION_NAME", "tpot-booking-deployer")
 
 dynamodb = boto3.resource("dynamodb")
 
@@ -69,6 +70,33 @@ def _get_booking_table():
 
 def _get_notification_table():
     return dynamodb.Table(NOTIFICATION_CONFIG_TABLE)
+
+
+def _invoke_deployer(instance_id: str, booking_id: str) -> None:
+    """Asynchronously invoke the deployer Lambda to (re)deploy on an instance."""
+    try:
+        lambda_client = boto3.client("lambda")
+        payload = {
+            "detail": {
+                "instance-id": instance_id,
+                "state": "running",
+            },
+            "booking_id": booking_id,
+        }
+        lambda_client.invoke(
+            FunctionName=DEPLOYER_FUNCTION_NAME,
+            InvocationType="Event",
+            Payload=json.dumps(payload),
+        )
+        logger.info(
+            "Invoked deployer for instance %s, booking %s",
+            instance_id,
+            booking_id,
+        )
+    except ClientError as e:
+        logger.error(
+            "Failed to invoke deployer for instance %s: %s", instance_id, e
+        )
 
 
 # ─── Booking Handlers ───────────────────────────────────────────────────────
@@ -127,14 +155,33 @@ def create_booking(body: dict) -> dict:
             ),
         })
 
-    # If override confirmed, terminate conflicting instances
+    # If override confirmed, handle conflicting instances
+    reuse_instance_id = ""
+    reuse_region = ""
+    reuse_az = ""
+
     if conflicting and confirm_override:
         for conflict in conflicting:
             conflict_id = conflict.get("instanceId", "")
             conflict_region = conflict.get("region", "")
+            conflict_az = conflict.get("az", "")
             conflict_booking_id = conflict.get("bookingId", "")
+            conflict_status = conflict.get("status", "")
 
-            if conflict_id and conflict_region:
+            # Check if instance can be reused (has a running instance)
+            can_reuse = (
+                conflict_id
+                and conflict_region
+                and conflict_status in (BookingStatus.READY.value, BookingStatus.DEPLOYING.value)
+            )
+
+            if can_reuse:
+                # Reuse the existing instance - do NOT terminate
+                reuse_instance_id = conflict_id
+                reuse_region = conflict_region
+                reuse_az = conflict_az
+            elif conflict_id and conflict_region:
+                # Instance exists but not in a reusable state - terminate
                 terminate_instance(conflict_id, conflict_region)
 
             # Update old booking status to terminated
@@ -149,23 +196,46 @@ def create_booking(body: dict) -> dict:
                     },
                 )
 
-    # Create new booking
-    booking = Booking(
-        instanceType=instance_type,
-        deploymentPlan=deployment_plan_id,
-        status=BookingStatus.POLLING.value,
-        whitelistIps=body.get("whitelistIps", []),
-    )
+    # Create new booking - reuse instance if available
+    if reuse_instance_id:
+        booking = Booking(
+            instanceType=instance_type,
+            deploymentPlan=deployment_plan_id,
+            status=BookingStatus.DEPLOYING.value,
+            whitelistIps=body.get("whitelistIps", []),
+            instanceId=reuse_instance_id,
+            region=reuse_region,
+            az=reuse_az,
+        )
+    else:
+        booking = Booking(
+            instanceType=instance_type,
+            deploymentPlan=deployment_plan_id,
+            status=BookingStatus.POLLING.value,
+            whitelistIps=body.get("whitelistIps", []),
+        )
 
     table.put_item(Item=booking.to_dict())
 
-    # Send notification
-    send_notification(
-        title=f"New booking created: {deployment_plan_id}",
-        message=f"Booking {booking.bookingId} created. Polling for {instance_type} capacity.",
-        event_type="booking_created",
-        booking_data=booking.to_dict(),
-    )
+    # If reusing instance, invoke deployer to switch deployment
+    if reuse_instance_id:
+        _invoke_deployer(reuse_instance_id, booking.bookingId)
+        send_notification(
+            title=f"Reusing instance for: {deployment_plan_id}",
+            message=(
+                f"Booking {booking.bookingId} created. "
+                f"Reusing existing instance {reuse_instance_id}, switching deployment plan."
+            ),
+            event_type="booking_created",
+            booking_data=booking.to_dict(),
+        )
+    else:
+        send_notification(
+            title=f"New booking created: {deployment_plan_id}",
+            message=f"Booking {booking.bookingId} created. Polling for {instance_type} capacity.",
+            event_type="booking_created",
+            booking_data=booking.to_dict(),
+        )
 
     return _response(201, booking.to_dict())
 

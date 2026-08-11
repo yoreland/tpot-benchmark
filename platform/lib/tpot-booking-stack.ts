@@ -326,6 +326,13 @@ def generate_policy(principal_id, effect, resource):
       },
     });
 
+    // Grant apiHandler permission to invoke deployer (for instance reuse on override)
+    apiHandler.addEnvironment('DEPLOYER_FUNCTION_NAME', deployer.functionName);
+    apiHandlerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [deployer.functionArn],
+    }));
+
     // Capacity Poller Lambda
     const capacityPollerRole = new iam.Role(this, 'CapacityPollerRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),

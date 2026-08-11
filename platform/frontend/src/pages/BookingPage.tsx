@@ -128,12 +128,21 @@ const BookingPage: React.FC = () => {
                 {conflictData.conflicting_booking.status}
               </Descriptions.Item>
             </Descriptions>
-            <Text
-              type="danger"
-              style={{ display: 'block', marginTop: 16 }}
-            >
-              确认后将停止当前运行的实例并重新部署新方案。
-            </Text>
+            {conflictData.conflicting_booking.instanceId ? (
+              <Text
+                type="success"
+                style={{ display: 'block', marginTop: 16 }}
+              >
+                将复用当前实例，自动切换到新部署方案（无需重新抢机器）
+              </Text>
+            ) : (
+              <Text
+                type="danger"
+                style={{ display: 'block', marginTop: 16 }}
+              >
+                确认后将停止当前运行的实例并重新部署新方案。
+              </Text>
+            )}
           </div>
         )}
       </Modal>
