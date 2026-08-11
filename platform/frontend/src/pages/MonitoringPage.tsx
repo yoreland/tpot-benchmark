@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card,
   Tag,
@@ -37,6 +37,15 @@ const MonitoringPage: React.FC = () => {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(false);
   const [whitelistMap, setWhitelistMap] = useState<Record<string, string>>({});
+  const whitelistMapRef = useRef<Record<string, string>>({});
+
+  const updateWhitelistMap = (updater: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => {
+    setWhitelistMap((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      whitelistMapRef.current = next;
+      return next;
+    });
+  };
 
   const loadBookings = useCallback(async () => {
     setLoading(true);
@@ -47,22 +56,22 @@ const MonitoringPage: React.FC = () => {
       );
       setBookings(active);
       // Initialize whitelist text areas
+      const currentMap = whitelistMapRef.current;
       const map: Record<string, string> = {};
       for (const b of active) {
-        if (!(b.bookingId in whitelistMap)) {
+        if (!(b.bookingId in currentMap)) {
           map[b.bookingId] = (b.whitelistIps || []).join('\n');
         } else {
-          map[b.bookingId] = whitelistMap[b.bookingId];
+          map[b.bookingId] = currentMap[b.bookingId];
         }
       }
-      setWhitelistMap(map);
+      updateWhitelistMap(map);
     } catch (err) {
       message.error('获取预约列表失败');
       console.error(err);
     } finally {
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -77,7 +86,7 @@ const MonitoringPage: React.FC = () => {
   };
 
   const handleSaveWhitelist = async (bookingId: string) => {
-    const text = whitelistMap[bookingId] || '';
+    const text = whitelistMapRef.current[bookingId] || '';
     const ips = text
       .split('\n')
       .map((ip) => ip.trim())
@@ -167,7 +176,7 @@ const MonitoringPage: React.FC = () => {
                   placeholder="每行一个IP地址，例如：&#10;10.0.0.1/32&#10;192.168.1.0/24"
                   value={whitelistMap[booking.bookingId] || ''}
                   onChange={(e) =>
-                    setWhitelistMap((prev) => ({
+                    updateWhitelistMap((prev) => ({
                       ...prev,
                       [booking.bookingId]: e.target.value,
                     }))
