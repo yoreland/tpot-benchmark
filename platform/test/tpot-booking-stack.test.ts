@@ -76,7 +76,7 @@ describe('TpotBookingStack', () => {
 
   test('creates S3 bucket for frontend', () => {
     template.hasResourceProperties('AWS::S3::Bucket', {
-      BucketName: 'tpot-booking-frontend-077090643075',
+      BucketName: 'tpot-booking-frontend-077090643075-us-east-1',
     });
   });
 

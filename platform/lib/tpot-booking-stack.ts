@@ -51,7 +51,7 @@ export class TpotBookingStack extends cdk.Stack {
     // ─── S3 Bucket + CloudFront for SPA ────────────────────────────────
 
     const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
-      bucketName: `tpot-booking-frontend-${this.account}`,
+      bucketName: `tpot-booking-frontend-${this.account}-${this.region}`,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
