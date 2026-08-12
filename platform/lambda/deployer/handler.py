@@ -44,8 +44,19 @@ MAX_HEALTH_WAIT = 1200  # seconds max to wait for service health after command c
 HEALTH_CHECK_INTERVAL = 15  # seconds between health checks within a single poll cycle
 
 # Model settings
-MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-ai/DeepSeek-V4-Flash")
-MODEL_LOCAL_PATH = f"/opt/dlami/nvme/models/{MODEL_NAME.replace('/', '__')}"
+DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-ai/DeepSeek-V4-Flash")
+
+# Per-plan model mapping
+PLAN_MODEL_MAP = {
+    "h200-tp8-eagle": "deepseek-ai/DeepSeek-V4-Flash",
+    "h200-tp8-eagle-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "b300-tp8-eagle": "deepseek-ai/DeepSeek-V4-Flash",
+    "b300-tp8-eagle-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "b300-pd-2p2d": "deepseek-ai/DeepSeek-V4-Flash",
+    "b300-pd-2p2d-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "b300-pd-3p1d": "deepseek-ai/DeepSeek-V4-Flash",
+    "b300-pd-3p1d-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
+}
 
 # Path to bundled compose files (packaged with the Lambda)
 COMPOSE_FILES_DIR = Path(__file__).parent / "compose-files"
@@ -268,7 +279,7 @@ def _load_compose_content(compose_file: str) -> str:
     return ""
 
 
-def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
+def _get_compose_commands(deployment_plan: str, compose_file: str, model_name: str = "") -> list:
     """Generate the full deployment commands including model download.
 
     The command sequence is:
@@ -281,6 +292,10 @@ def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
     The compose file content is inlined via heredoc so no external S3 bucket
     is required.
     """
+    if not model_name:
+        model_name = DEFAULT_MODEL_NAME
+    model_local_path = f"/opt/dlami/nvme/models/{model_name.replace('/', '__')}"
+
     compose_content = _load_compose_content(compose_file)
     if not compose_content:
         return [
@@ -325,9 +340,9 @@ def _get_compose_commands(deployment_plan: str, compose_file: str) -> list:
         "  ln -sf /mnt/nvme/models /opt/dlami/nvme/models",
         "  echo 'Using NVMe storage for models via symlink'",
         "fi",
-        f"echo 'Downloading model weights from HuggingFace: {MODEL_NAME}'",
+        f"echo 'Downloading model weights from HuggingFace: {model_name}'",
         "pip3 install -q huggingface_hub",
-        f"python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('{MODEL_NAME}', local_dir='{MODEL_LOCAL_PATH}')\"",
+        f"python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('{model_name}', local_dir='{model_local_path}')\"",
         "echo 'Model download from HuggingFace completed'",
         # ─── Step 3a: Force stop ALL existing containers (GPU memory release) ───
         "echo '=== Step 3a: Stopping all existing containers ==='",
@@ -463,11 +478,18 @@ def _handle_deploy(event):
     # Determine compose file from deployment plan
     plan_compose_map = {
         "h200-tp8-eagle": "docker-compose-tp8-h200.yaml",
+        "h200-tp8-eagle-0731": "docker-compose-tp8-h200-0731.yaml",
         "b300-tp8-eagle": "docker-compose-tp8-b300.yaml",
+        "b300-tp8-eagle-0731": "docker-compose-tp8-b300-0731.yaml",
         "b300-pd-2p2d": "docker-compose-pd-2p2d.yaml",
+        "b300-pd-2p2d-0731": "docker-compose-pd-2p2d-0731.yaml",
         "b300-pd-3p1d": "docker-compose-pd-v4flash-b300.yaml",
+        "b300-pd-3p1d-0731": "docker-compose-pd-v4flash-b300-0731.yaml",
     }
     compose_file = plan_compose_map.get(deployment_plan, "docker-compose.yaml")
+
+    # Determine model name for this plan
+    model_name = PLAN_MODEL_MAP.get(deployment_plan, DEFAULT_MODEL_NAME)
 
     ssm_client = boto3.client("ssm", region_name=region)
 
@@ -484,7 +506,7 @@ def _handle_deploy(event):
         return {"statusCode": 500, "body": "SSM timeout"}
 
     # Generate deployment commands (now includes model download)
-    commands = _get_compose_commands(deployment_plan, compose_file)
+    commands = _get_compose_commands(deployment_plan, compose_file, model_name)
 
     # Send the long-running command (does NOT wait for completion)
     command_id = _send_deploy_command(ssm_client, instance_id, commands, timeout=SSM_COMMAND_TIMEOUT)

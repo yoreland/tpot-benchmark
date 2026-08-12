@@ -15,6 +15,16 @@ DEPLOYMENT_PLANS = {
         composeFile="docker-compose-tp8-h200.yaml",
         recipe="recipes/h200-hold.env",
         description="H200 8-way tensor parallel full precision",
+        modelName="deepseek-ai/DeepSeek-V4-Flash",
+    ),
+    "h200-tp8-eagle-0731": DeploymentPlan(
+        id="h200-tp8-eagle-0731",
+        name="H200 TP8 Eagle (0731)",
+        instanceType="p5en.48xlarge",
+        composeFile="docker-compose-tp8-h200-0731.yaml",
+        recipe="recipes/h200-hold.env",
+        description="H200 TP8 + EAGLE with DeepSeek-V4-Flash-0731 (DSpark draft heads)",
+        modelName="deepseek-ai/DeepSeek-V4-Flash-0731",
     ),
     "b300-tp8-eagle": DeploymentPlan(
         id="b300-tp8-eagle",
@@ -23,6 +33,16 @@ DEPLOYMENT_PLANS = {
         composeFile="docker-compose-tp8-b300.yaml",
         recipe="recipes/b300-pd-hold.env",
         description="B300 8-way tensor parallel with Eagle speculative decoding",
+        modelName="deepseek-ai/DeepSeek-V4-Flash",
+    ),
+    "b300-tp8-eagle-0731": DeploymentPlan(
+        id="b300-tp8-eagle-0731",
+        name="B300 TP8 Eagle (0731)",
+        instanceType="p6-b300.48xlarge",
+        composeFile="docker-compose-tp8-b300-0731.yaml",
+        recipe="recipes/b300-pd-hold.env",
+        description="B300 TP8 + EAGLE with DeepSeek-V4-Flash-0731 (DSpark draft heads)",
+        modelName="deepseek-ai/DeepSeek-V4-Flash-0731",
     ),
     "b300-pd-2p2d": DeploymentPlan(
         id="b300-pd-2p2d",
@@ -31,6 +51,16 @@ DEPLOYMENT_PLANS = {
         composeFile="docker-compose-pd-2p2d.yaml",
         recipe="recipes/b300-pd-hold.env",
         description="B300 disaggregated prefill-decode (2 prefill + 2 decode workers)",
+        modelName="deepseek-ai/DeepSeek-V4-Flash",
+    ),
+    "b300-pd-2p2d-0731": DeploymentPlan(
+        id="b300-pd-2p2d-0731",
+        name="B300 PD 2P2D (0731)",
+        instanceType="p6-b300.48xlarge",
+        composeFile="docker-compose-pd-2p2d-0731.yaml",
+        recipe="recipes/b300-pd-hold.env",
+        description="B300 PD 2P2D with DeepSeek-V4-Flash-0731 (DSpark draft heads)",
+        modelName="deepseek-ai/DeepSeek-V4-Flash-0731",
     ),
     "b300-pd-3p1d": DeploymentPlan(
         id="b300-pd-3p1d",
@@ -39,6 +69,16 @@ DEPLOYMENT_PLANS = {
         composeFile="docker-compose-pd-v4flash-b300.yaml",
         recipe="recipes/b300-pd-hold.env",
         description="B300 PD disaggregation 3 prefill + 1 decode with EAGLE (validated TPOT 3.60ms)",
+        modelName="deepseek-ai/DeepSeek-V4-Flash",
+    ),
+    "b300-pd-3p1d-0731": DeploymentPlan(
+        id="b300-pd-3p1d-0731",
+        name="B300 PD 3P1D (0731)",
+        instanceType="p6-b300.48xlarge",
+        composeFile="docker-compose-pd-v4flash-b300-0731.yaml",
+        recipe="recipes/b300-pd-hold.env",
+        description="B300 PD 3P1D with DeepSeek-V4-Flash-0731 (DSpark draft heads)",
+        modelName="deepseek-ai/DeepSeek-V4-Flash-0731",
     ),
 }
 

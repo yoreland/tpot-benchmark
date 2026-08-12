@@ -61,6 +61,7 @@ class DeploymentPlan:
     composeFile: str = ""
     recipe: str = ""
     description: str = ""
+    modelName: str = "deepseek-ai/DeepSeek-V4-Flash"
 
     def to_dict(self) -> dict:
         return asdict(self)
