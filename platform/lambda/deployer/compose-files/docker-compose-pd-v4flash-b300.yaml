@@ -57,6 +57,7 @@ services:
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
       --disaggregation-transfer-backend nixl
       --disaggregation-mode prefill --disaggregation-bootstrap-port 9000
+      --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30000
     healthcheck:
       <<: *healthcheck-base
@@ -74,6 +75,7 @@ services:
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
       --disaggregation-transfer-backend nixl
       --disaggregation-mode prefill --disaggregation-bootstrap-port 9100
+      --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30100
     healthcheck:
       <<: *healthcheck-base
@@ -91,6 +93,7 @@ services:
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
       --disaggregation-transfer-backend nixl
       --disaggregation-mode prefill --disaggregation-bootstrap-port 9200
+      --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30200
     healthcheck:
       <<: *healthcheck-base
@@ -110,6 +113,7 @@ services:
       --disaggregation-mode decode --disaggregation-bootstrap-port 9300
       --speculative-algorithm EAGLE --speculative-num-steps 3
       --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
+      --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30300
     healthcheck:
       <<: *healthcheck-base
