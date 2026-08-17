@@ -40,7 +40,7 @@ SGLANG_PORT = 30080
 # Timeouts
 SSM_WAIT_TIMEOUT = 120  # seconds to wait for SSM readiness
 SSM_COMMAND_TIMEOUT = 3600  # seconds for the long-running deploy command (1 hour)
-MAX_HEALTH_WAIT = 1200  # seconds max to wait for service health after command completes (20 min)
+MAX_HEALTH_WAIT = 2100  # seconds max to wait for service health after command completes (35 min)
 HEALTH_CHECK_INTERVAL = 15  # seconds between health checks within a single poll cycle
 
 # Model settings

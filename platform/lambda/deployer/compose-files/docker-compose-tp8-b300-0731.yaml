@@ -2,6 +2,7 @@
 # Unified tp=8 single engine + DSpark (no PD disaggregation)
 # Target: B300 8-GPU, DeepSeek-V4-Flash-0731
 # Purpose: 方案 C baseline for customer validation (40K in / 1.5K out)
+# NOTE: DSpark + megamoe + cuda-graph 组合会触发 SGLang 崩溃 (tensor_split on None)。已切到 deepep 绕过。
 #
 # Serves directly on port 30080 so the same bench command works across
 # all three topologies (2P2D / 3P1D / tp8) without changing --base-url.
@@ -23,12 +24,11 @@ services:
       - jitcache:/root/.cache
     environment:
       NVIDIA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
-      SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK: "16384"
     restart: "no"
     command: >
       python3 -m sglang.launch_server
       --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash-0731
-      --tp 8 --moe-a2a-backend megamoe --mem-fraction-static 0.90
+      --tp 8 --moe-a2a-backend deepep --mem-fraction-static 0.90
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
       --speculative-algorithm DSPARK
       --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
