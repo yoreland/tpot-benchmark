@@ -48,6 +48,21 @@ export class TpotBookingStack extends cdk.Stack {
       displayName: 'T-POT Booking Notifications',
     });
 
+    // ─── S3 Bucket for Compose Files ──────────────────────────────────
+
+    const composeBucket = new s3.Bucket(this, 'ComposeBucket', {
+      bucketName: `tpot-booking-compose-${this.account}-${this.region}`,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+    });
+
+    new s3deploy.BucketDeployment(this, 'ComposeFilesDeployment', {
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../lambda/deployer/compose-files'))],
+      destinationBucket: composeBucket,
+      destinationKeyPrefix: 'compose-files/',
+    });
+
     // ─── S3 Bucket + CloudFront for SPA ────────────────────────────────
 
     const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
@@ -312,6 +327,11 @@ def generate_policy(principal_id, effect, resource):
       resources: ['*'],
     }));
 
+    deployerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject'],
+      resources: [`${composeBucket.bucketArn}/*`],
+    }));
+
     const deployer = new lambda.Function(this, 'DeployerFunction', {
       functionName: 'tpot-booking-deployer',
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -324,6 +344,7 @@ def generate_policy(principal_id, effect, resource):
         NOTIFICATION_TOPIC_ARN: notificationTopic.topicArn,
         NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
         MODEL_NAME: this.node.tryGetContext('modelName') ?? 'deepseek-ai/DeepSeek-V4-Flash',
+        COMPOSE_BUCKET: composeBucket.bucketName,
       },
     });
 
@@ -619,6 +640,12 @@ function handler(event) {
       value: frontendBucket.bucketName,
       description: 'Frontend S3 bucket name',
       exportName: 'TpotBookingFrontendBucketName',
+    });
+
+    new cdk.CfnOutput(this, 'ComposeBucketName', {
+      value: composeBucket.bucketName,
+      description: 'S3 bucket for compose files (update here to change deployments without cdk deploy)',
+      exportName: 'TpotBookingComposeBucketName',
     });
   }
 }

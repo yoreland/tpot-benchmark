@@ -61,6 +61,9 @@ PLAN_MODEL_MAP = {
 # Path to bundled compose files (packaged with the Lambda)
 COMPOSE_FILES_DIR = Path(__file__).parent / "compose-files"
 
+# S3 bucket for compose files (runtime override without cdk deploy)
+COMPOSE_BUCKET = os.environ.get("COMPOSE_BUCKET", "")
+
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -271,11 +274,25 @@ def _check_command_status(ssm_client, command_id: str, instance_id: str) -> str:
 
 
 def _load_compose_content(compose_file: str) -> str:
-    """Load compose file content from the bundled compose-files directory."""
+    """Load compose file content. Tries S3 first, falls back to local bundle."""
+    # Try S3 first
+    if COMPOSE_BUCKET:
+        try:
+            s3 = boto3.client("s3")
+            resp = s3.get_object(Bucket=COMPOSE_BUCKET, Key=f"compose-files/{compose_file}")
+            content = resp["Body"].read().decode("utf-8")
+            logger.info("Loaded compose file from S3: s3://%s/compose-files/%s", COMPOSE_BUCKET, compose_file)
+            return content
+        except ClientError as e:
+            logger.warning("Failed to load from S3, falling back to bundle: %s", e)
+
+    # Fallback to local bundle
     compose_path = COMPOSE_FILES_DIR / compose_file
     if compose_path.exists():
+        logger.info("Loaded compose file from local bundle: %s", compose_path)
         return compose_path.read_text()
-    logger.error("Compose file not found: %s", compose_path)
+
+    logger.error("Compose file not found in S3 or bundle: %s", compose_file)
     return ""
 
 
