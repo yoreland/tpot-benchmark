@@ -1,5 +1,6 @@
 # docker-compose-pd-v4flash-b300-0731.yaml
-# PD Disaggregation: 3 Prefill (tp=2) + 1 Decode (tp=2, EAGLE) + sglang-router
+# Note: DSpark is NOT compatible with PD disaggregation. Running target-only (no speculative decoding).
+# PD Disaggregation: 3 Prefill (tp=2) + 1 Decode (tp=2) + sglang-router
 # Target: B300 8-GPU instance, DeepSeek-V4-Flash-0731
 #
 # Model: DeepSeek-V4-Flash-0731 (166.9 GB, built-in DSpark draft heads)
@@ -10,7 +11,6 @@
 #   - dp-attention disabled (causes AssertionError + GPU memory drops to 0)
 #   - Transfer backend: nixl (mooncake doesn't work for same-node PD)
 #   - Router --prefill includes bootstrap port (required for PD handshake)
-#   - EAGLE on decode only (accept_length ~2.85, cuts TPOT by ~2.2x)
 #   - runtime: nvidia required for NVIDIA_VISIBLE_DEVICES to work in compose
 #
 # Usage:
@@ -110,8 +110,6 @@ services:
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
       --disaggregation-transfer-backend nixl
       --disaggregation-mode decode --disaggregation-bootstrap-port 9300
-      --speculative-algorithm EAGLE --speculative-num-steps 3
-      --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
       --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30300
     healthcheck:

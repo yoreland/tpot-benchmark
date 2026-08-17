@@ -1,5 +1,5 @@
 # docker-compose-tp8-b300-0731.yaml
-# Unified tp=8 single engine + EAGLE (no PD disaggregation)
+# Unified tp=8 single engine + DSpark (no PD disaggregation)
 # Target: B300 8-GPU, DeepSeek-V4-Flash-0731
 # Purpose: 方案 C baseline for customer validation (40K in / 1.5K out)
 #
@@ -28,10 +28,9 @@ services:
     command: >
       python3 -m sglang.launch_server
       --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash-0731
-      --tp 8 --moe-a2a-backend megamoe --mem-fraction-static 0.85
+      --tp 8 --moe-a2a-backend megamoe --mem-fraction-static 0.90
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
-      --speculative-algorithm EAGLE --speculative-num-steps 3
-      --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
+      --speculative-algorithm DSPARK
       --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30080
     healthcheck:

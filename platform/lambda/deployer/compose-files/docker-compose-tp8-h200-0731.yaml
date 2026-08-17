@@ -1,5 +1,5 @@
 # docker-compose-tp8-h200-0731.yaml
-# H200 整机部署（unified，非 PD 分离）+ EAGLE
+# H200 整机部署（unified，非 PD 分离）+ DSpark
 # Target: p5en.48xlarge (8x H200 141GB), DeepSeek-V4-Flash-0731
 # Purpose: 与 B300 在同一客户口径（40K in / 1.5K out, range_ratio=1.0）下横向对比
 #
@@ -39,12 +39,11 @@ services:
       --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash-0731
       --tp 8
       --moe-runner-backend marlin
-      --mem-fraction-static 0.85
+      --mem-fraction-static 0.90
       --trust-remote-code
       --cuda-graph-max-bs 64
       --enable-metrics
-      --speculative-algorithm EAGLE --speculative-num-steps 3
-      --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
+      --speculative-algorithm DSPARK
       --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30080
     healthcheck:

@@ -1,5 +1,6 @@
 # docker-compose-pd-2p2d-0731.yaml
-# PD Disaggregation: 2 Prefill (tp=2) + 2 Decode (tp=2, EAGLE) + router
+# Note: DSpark is NOT compatible with PD disaggregation. Running target-only (no speculative decoding).
+# PD Disaggregation: 2 Prefill (tp=2) + 2 Decode (tp=2) + router
 # Target: B300 8-GPU, DeepSeek-V4-Flash-0731
 # Purpose: Compare with 3P1D — same TPOT but 2x decode parallelism for throughput
 #
@@ -79,8 +80,6 @@ services:
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
       --disaggregation-transfer-backend nixl
       --disaggregation-mode decode --disaggregation-bootstrap-port 9200
-      --speculative-algorithm EAGLE --speculative-num-steps 3
-      --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
       --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30200
     healthcheck:
@@ -99,8 +98,6 @@ services:
       --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
       --disaggregation-transfer-backend nixl
       --disaggregation-mode decode --disaggregation-bootstrap-port 9300
-      --speculative-algorithm EAGLE --speculative-num-steps 3
-      --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
       --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
       --host 0.0.0.0 --port 30300
     healthcheck:
