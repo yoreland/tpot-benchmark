@@ -9,7 +9,7 @@ import {
   LogoutOutlined,
   CloudServerOutlined,
 } from '@ant-design/icons';
-import { setCredentials, getCredentials, clearCredentials } from './api/client';
+import { setCredentials, getCredentials, clearCredentials, getStatus } from './api/client';
 import BookingPage from './pages/BookingPage';
 import MonitoringPage from './pages/MonitoringPage';
 import HistoryPage from './pages/HistoryPage';
@@ -61,11 +61,19 @@ const App: React.FC = () => {
     try {
       const values = await form.validateFields();
       setCredentials(values.username, values.password);
-      setIsLoggedIn(true);
-      setLoginVisible(false);
-      message.success('登录成功');
+
+      // Verify credentials by calling backend
+      try {
+        await getStatus();
+        setIsLoggedIn(true);
+        setLoginVisible(false);
+        message.success('登录成功');
+      } catch {
+        clearCredentials();
+        message.error('用户名或密码错误');
+      }
     } catch {
-      // validation failed
+      // form validation failed
     }
   };
 
