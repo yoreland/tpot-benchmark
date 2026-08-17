@@ -53,15 +53,7 @@ DEPLOYMENT_PLANS = {
         description="B300 disaggregated prefill-decode (2 prefill + 2 decode workers)",
         modelName="deepseek-ai/DeepSeek-V4-Flash",
     ),
-    "b300-pd-2p2d-0731": DeploymentPlan(
-        id="b300-pd-2p2d-0731",
-        name="B300 PD 2P2D (0731)",
-        instanceType="p6-b300.48xlarge",
-        composeFile="docker-compose-pd-2p2d-0731.yaml",
-        recipe="recipes/b300-pd-hold.env",
-        description="B300 PD 2P2D with DeepSeek-V4-Flash-0731 (target-only, DSpark\u4e0d\u517c\u5bb9PD)",
-        modelName="deepseek-ai/DeepSeek-V4-Flash-0731",
-    ),
+
     "b300-pd-3p1d": DeploymentPlan(
         id="b300-pd-3p1d",
         name="B300 PD 3P1D",
@@ -71,15 +63,7 @@ DEPLOYMENT_PLANS = {
         description="B300 PD disaggregation 3 prefill + 1 decode with EAGLE (validated TPOT 3.60ms)",
         modelName="deepseek-ai/DeepSeek-V4-Flash",
     ),
-    "b300-pd-3p1d-0731": DeploymentPlan(
-        id="b300-pd-3p1d-0731",
-        name="B300 PD 3P1D (0731)",
-        instanceType="p6-b300.48xlarge",
-        composeFile="docker-compose-pd-v4flash-b300-0731.yaml",
-        recipe="recipes/b300-pd-hold.env",
-        description="B300 PD 3P1D with DeepSeek-V4-Flash-0731 (target-only, DSpark\u4e0d\u517c\u5bb9PD)",
-        modelName="deepseek-ai/DeepSeek-V4-Flash-0731",
-    ),
+
 }
 
 

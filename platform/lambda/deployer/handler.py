@@ -53,9 +53,7 @@ PLAN_MODEL_MAP = {
     "b300-tp8-eagle": "deepseek-ai/DeepSeek-V4-Flash",
     "b300-tp8-eagle-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
     "b300-pd-2p2d": "deepseek-ai/DeepSeek-V4-Flash",
-    "b300-pd-2p2d-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
     "b300-pd-3p1d": "deepseek-ai/DeepSeek-V4-Flash",
-    "b300-pd-3p1d-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
 }
 
 # Path to bundled compose files (packaged with the Lambda)
@@ -499,9 +497,7 @@ def _handle_deploy(event):
         "b300-tp8-eagle": "docker-compose-tp8-b300.yaml",
         "b300-tp8-eagle-0731": "docker-compose-tp8-b300-0731.yaml",
         "b300-pd-2p2d": "docker-compose-pd-2p2d.yaml",
-        "b300-pd-2p2d-0731": "docker-compose-pd-2p2d-0731.yaml",
         "b300-pd-3p1d": "docker-compose-pd-v4flash-b300.yaml",
-        "b300-pd-3p1d-0731": "docker-compose-pd-v4flash-b300-0731.yaml",
     }
     compose_file = plan_compose_map.get(deployment_plan, "docker-compose.yaml")
 
