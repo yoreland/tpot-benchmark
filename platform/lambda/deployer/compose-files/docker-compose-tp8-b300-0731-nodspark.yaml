@@ -1,0 +1,44 @@
+# docker-compose-tp8-b300-0731-nodspark.yaml
+# Unified tp=8 single engine, NO DSpark speculative decoding (standard decode).
+# Derived from docker-compose-tp8-b300-0731.yaml by removing
+#   --speculative-algorithm DSPARK
+# Target: B300 8-GPU, DeepSeek-V4-Flash-0731
+# Purpose: standard-decode baseline for TPOT comparison vs the DSpark run
+#          (40K in / 1.5K out). Same port 30080 so the same bench command works.
+#
+# MoE backend stays flashinfer_mxfp4 (the fix that made the DSpark build boot);
+# only speculative decoding is turned off here. Everything else unchanged.
+
+volumes:
+  jitcache:
+
+services:
+  sglang-tp8:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    runtime: nvidia
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - jitcache:/root/.cache
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+    restart: "no"
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash-0731
+      --tp 8
+      --moe-runner-backend flashinfer_mxfp4
+      --mem-fraction-static 0.90
+      --chunked-prefill-size 4096
+      --swa-full-tokens-ratio 0.1
+      --trust-remote-code --enable-metrics
+      --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
+      --host 0.0.0.0 --port 30080
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s

@@ -52,6 +52,7 @@ PLAN_MODEL_MAP = {
     "h200-tp8-eagle-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
     "b300-tp8-eagle": "deepseek-ai/DeepSeek-V4-Flash",
     "b300-tp8-eagle-0731": "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "b300-tp8-eagle-0731-nodspark": "deepseek-ai/DeepSeek-V4-Flash-0731",
     "b300-pd-2p2d": "deepseek-ai/DeepSeek-V4-Flash",
     "b300-pd-3p1d": "deepseek-ai/DeepSeek-V4-Flash",
 }
@@ -496,6 +497,7 @@ def _handle_deploy(event):
         "h200-tp8-eagle-0731": "docker-compose-tp8-h200-0731.yaml",
         "b300-tp8-eagle": "docker-compose-tp8-b300.yaml",
         "b300-tp8-eagle-0731": "docker-compose-tp8-b300-0731.yaml",
+        "b300-tp8-eagle-0731-nodspark": "docker-compose-tp8-b300-0731-nodspark.yaml",
         "b300-pd-2p2d": "docker-compose-pd-2p2d.yaml",
         "b300-pd-3p1d": "docker-compose-pd-v4flash-b300.yaml",
     }

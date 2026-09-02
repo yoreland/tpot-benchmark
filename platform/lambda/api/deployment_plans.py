@@ -44,6 +44,15 @@ DEPLOYMENT_PLANS = {
         description="B300 TP8 + DSpark speculative decoding with DeepSeek-V4-Flash-0731",
         modelName="deepseek-ai/DeepSeek-V4-Flash-0731",
     ),
+    "b300-tp8-eagle-0731-nodspark": DeploymentPlan(
+        id="b300-tp8-eagle-0731-nodspark",
+        name="B300 TP8 (0731, no DSpark)",
+        instanceType="p6-b300.48xlarge",
+        composeFile="docker-compose-tp8-b300-0731-nodspark.yaml",
+        recipe="recipes/b300-pd-hold.env",
+        description="B300 TP8 standard decode (no DSpark) baseline for DeepSeek-V4-Flash-0731",
+        modelName="deepseek-ai/DeepSeek-V4-Flash-0731",
+    ),
     "b300-pd-2p2d": DeploymentPlan(
         id="b300-pd-2p2d",
         name="B300 PD 2P2D",
