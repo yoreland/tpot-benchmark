@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "CDK infrastructure stack: DynamoDB tables, API Gateway with basic auth, Lambda functions, S3+CloudFront for SPA hosting, SNS topic, security group management IAM policies. This is the foundational CDK app that all other features build on.",
+  "status": "completed",
+  "steps": [
+    "Create platform/ directory structure: package.json, tsconfig.json, cdk.json, bin/app.ts, lib/ for stacks",
+    "Initialize CDK app in platform/bin/app.ts with a single stack TpotBookingStack",
+    "Create lib/tpot-booking-stack.ts with: (a) DynamoDB table 'BookingTable' with partition key bookingId and GSI on instanceType+status for conflict detection, (b) DynamoDB table 'NotificationConfigTable' for notification settings per user/global, (c) S3 bucket for frontend SPA with CloudFront distribution, (d) API Gateway REST API with Lambda authorizer for basic auth (user/pass from SSM Parameter Store), (e) SNS topic for email notifications, (f) IAM role for backend Lambda with EC2, DynamoDB, SNS, SSM, S3 permissions, (g) IAM role for capacity poller Lambda with EC2 RunInstances/TerminateInstances/DescribeInstances, DynamoDB, SNS, SSM permissions",
+    "Create lib/lambda-authorizer.ts: a Lambda@Edge or API Gateway custom authorizer that checks Basic Auth credentials from SSM SecureString '/tpot-booking/basic-auth-credentials'",
+    "Add CDK outputs for: API Gateway URL, CloudFront distribution domain, DynamoDB table names, SNS topic ARN",
+    "Add package.json dependencies: aws-cdk-lib, constructs, @types/node, typescript, jest, ts-jest, aws-cdk-lib/assertions",
+    "Create a basic cdk synth test in test/tpot-booking-stack.test.ts that validates the stack synthesizes without error and contains expected resources"
+  ],
+  "acceptance_criteria": [
+    "Running 'cd platform && npm install && npm run build' succeeds without errors",
+    "Running 'cd platform && npx cdk synth' produces a valid CloudFormation template in cdk.out/",
+    "The synthesized template contains DynamoDB tables, API Gateway, Lambda functions, S3 bucket, CloudFront distribution",
+    "Running 'cd platform && npm test' passes the basic synth test"
+  ],
+  "verification": [
+    "cd platform && npm install && npm run build",
+    "cd platform && npx cdk synth --quiet",
+    "cd platform && npm test"
+  ],
+  "blocked_reason": null,
+  "findings": "Used Python 3.12 runtime instead of 3.9 (deprecated). CDK synth shows feature flag warnings but succeeds. All 12 tests pass. Package-lock.json generated with aws-cdk-lib 2.1025.0."
+}

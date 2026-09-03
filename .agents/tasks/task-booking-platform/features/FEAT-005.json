@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-005",
+  "type": "feat",
+  "description": "Instance reuse on booking override: when user confirms override of a conflicting booking that has a running instance (status ready/deploying with instanceId), reuse the existing instance instead of terminating it. Invoke deployer Lambda to switch docker compose deployment.",
+  "status": "completed",
+  "steps": [
+    "Modify lambda/api/handler.py create_booking() conflict handling to differentiate between reusable instances (have instanceId) and non-reusable (still polling/launching)",
+    "Add DEPLOYER_FUNCTION_NAME env var reading and _invoke_deployer helper to api/handler.py",
+    "Update CDK stack to pass DEPLOYER_FUNCTION_NAME env var to apiHandler and grant lambda:InvokeFunction permission on deployer",
+    "Update frontend BookingPage.tsx conflict modal to show different text based on whether the conflicting booking has an instanceId",
+    "Verify models.py supports instanceId/region/az in Booking constructor (already present)"
+  ],
+  "acceptance_criteria": [
+    "When override confirmed and conflicting booking has instanceId: instance is NOT terminated, new booking inherits instanceId/region/az, status set to deploying, deployer Lambda invoked",
+    "When override confirmed and conflicting booking has no instanceId: existing terminate behavior preserved",
+    "CDK synth succeeds with new env var and IAM permission",
+    "Frontend shows reuse message when conflicting booking has instanceId, terminate message otherwise",
+    "All tests pass"
+  ],
+  "verification": [
+    "cd platform && npm run build",
+    "cd platform && npx cdk synth --quiet",
+    "cd platform && npm test",
+    "cd platform/frontend && npm run build"
+  ],
+  "blocked_reason": null,
+  "findings": "All 15 CDK tests pass. CDK synth succeeds. Frontend builds. Python syntax valid. Used addEnvironment() after deployer creation to avoid circular dependency in CDK. The Booking model already had instanceId/region/az fields, no changes needed to models.py."
+}

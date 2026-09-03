@@ -1,0 +1,30 @@
+{
+  "project_type": "AWS CDK TypeScript infrastructure + React SPA + Lambda backend (greenfield platform module)",
+  "language": "TypeScript (CDK + frontend), Python (Lambda handlers)",
+  "build_system": "npm for CDK and React frontend, Python for Lambda",
+  "test_framework": "Jest for TypeScript/React, CDK assertions for infrastructure",
+  "build_command": "cd platform && npm run build",
+  "test_command": "cd platform && npm test",
+  "verification_instructions": "1. npm install in platform/, 2. npm run build succeeds, 3. cdk synth produces valid CloudFormation, 4. npm test passes",
+  "snapshot_or_generated_files": "CDK generates cdk.out/ with CloudFormation templates on cdk synth. Not checked in.",
+  "setup_instructions": "1. cd platform && npm install, 2. cd platform/frontend && npm install, 3. cdk bootstrap (for first deploy)",
+  "environment_constraints": "OPEN_INTERNET - full npm/pip access. Node.js v22 available. Python 3.9 available. AWS CDK installable via npm.",
+  "contribution_requirements": "Existing infra/ and scripts/ directories must remain untouched. The new platform/ directory is self-contained. Recipes and compose files are referenced by path from the parent repo.",
+  "key_patterns": "Existing patterns from the repo: 1) Capacity poller uses probe-then-launch (direct launch for B300 due to <20s windows). 2) Docker compose files define deployment topologies with network_mode: host, port 30080. 3) Recipes are .env files that configure model/tp/speculative params. 4) Bootstrap script handles NVMe RAID, model download, docker setup. 5) SUBNET_MAP in handler.py maps AZs to verified subnets. 6) Instance profile: tpot-bench-ec2-profile, SG: tpot-bench-noingress-sg. 7) Account: 077090643075.",
+  "relevant_files": [
+    "infra/lambda/capacity_poller/handler.py",
+    "infra/deploy-poller.sh",
+    "scripts/docker-compose-tp8-b300.yaml",
+    "scripts/docker-compose-tp4-h200.yaml",
+    "scripts/docker-compose-tp8-h200.yaml",
+    "scripts/docker-compose-pd-2p2d.yaml",
+    "scripts/docker-compose-pd-v4flash-b300.yaml",
+    "scripts/recipes/h200-tp4-fp4-eagle.env",
+    "scripts/recipes/b300-tp2-dp2-fp4-megamoe.env",
+    "scripts/recipes/b200-tp8-fp4-unified.env",
+    "scripts/recipes/h200-hold.env",
+    "scripts/recipes/b300-pd-hold.env",
+    "scripts/bootstrap/bench-bootstrap.sh"
+  ],
+  "directory_structure": "platform/ (new, self-contained): CDK app at root, frontend/ for React SPA, lambda/ for Python handlers. References ../scripts/ for compose files and recipes."
+}

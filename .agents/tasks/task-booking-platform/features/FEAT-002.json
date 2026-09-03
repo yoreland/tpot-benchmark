@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Backend Lambda API handlers: booking CRUD, capacity polling with booking integration, deployment orchestration, IP whitelist management, notification dispatch (email + Feishu webhook). This is the core business logic.",
+  "status": "completed",
+  "steps": [
+    "Create platform/lambda/ directory for Python Lambda handlers",
+    "Create platform/lambda/api/handler.py: API Gateway Lambda handler with routes: POST /bookings (create booking), GET /bookings (list with status filter), GET /bookings/{id} (get details), DELETE /bookings/{id} (cancel/terminate), PUT /bookings/{id}/whitelist (update IP whitelist), GET /deployments (list available deployment plans derived from ../scripts/recipes/ and compose files), GET /instances (list running instances from EC2 describe-instances with Project=tpot-benchmark tag), PUT /notifications (configure email/Feishu webhook settings)",
+    "Create platform/lambda/api/models.py: data classes for Booking (id, instanceType, deploymentPlan, status [pending/polling/launching/deploying/ready/terminated/failed], endpoint, whitelistIps, createdAt, updatedAt, instanceId, region, az), DeploymentPlan (id, name, instanceType, composeFile, recipe, description), NotificationConfig (email, feishuWebhook, enabled)",
+    "Create platform/lambda/api/notifications.py: send_notification() that dispatches to SNS (email) and HTTP POST to Feishu webhook URL (with message card format). Feishu webhook URL is stored in DynamoDB NotificationConfigTable.",
+    "Create platform/lambda/api/ec2_manager.py: (a) check_running_instances(instance_type) - queries EC2 for running instances of same type with Project=tpot-benchmark tag, returns list. (b) terminate_instance(instance_id) - terminates and waits. (c) update_security_group(instance_id, whitelist_ips) - creates/updates a per-instance SG with ingress rules for port 30080 from whitelisted IPs only. (d) get_instance_endpoint(instance_id) - returns public IP + port 30080.",
+    "Create platform/lambda/poller/handler.py: Enhanced capacity poller that integrates with DynamoDB bookings. On EventBridge trigger: (a) queries DynamoDB for bookings with status=polling, (b) for each pending booking, attempts to launch spot instance in configured regions/AZs (reusing SUBNET_MAP and direct-launch pattern from existing handler.py), (c) on successful launch, updates booking status to 'launching', stores instance_id, (d) sends notification on capacity found. Uses same AMI resolution, security group lookup as existing poller.",
+    "Create platform/lambda/deployer/handler.py: Triggered by EventBridge rule that monitors EC2 instance state changes (running). When a tpot-benchmark instance reaches 'running': (a) waits for instance to be reachable (SSM or port check), (b) executes deployment via SSM RunCommand: runs docker-compose up with the compose file matching the booking's deploymentPlan, (c) monitors port 30080 health endpoint, (d) on healthy: updates booking status to 'ready', sets endpoint, sends notification, (e) on timeout/failure: updates booking status to 'failed', sends notification.",
+    "Create platform/lambda/api/deployment_plans.py: Static registry mapping deployment plan IDs to instance types, compose files, and recipes. Plans: h200-tp4-eagle (p5en.48xlarge, docker-compose-tp4-h200.yaml), h200-tp8-eagle (p5en.48xlarge, docker-compose-tp8-h200.yaml), b300-tp8-eagle (p6-b300.48xlarge, docker-compose-tp8-b300.yaml), b300-pd-2p2d (p6-b300.48xlarge, docker-compose-pd-2p2d.yaml), b200-tp8-unified (p6-b200.48xlarge, compose derived from b200-tp8-fp4-unified.env).",
+    "Add conflict detection logic in POST /bookings: before creating a new booking, query GSI for same instanceType with status in [polling, launching, deploying, ready]. If found, return 409 with details of the conflicting booking and a confirmOverride flag. If confirmOverride=true in request body, terminate the existing instance and proceed.",
+    "Create platform/lambda/requirements.txt with boto3 (available in Lambda runtime) as the only dependency"
+  ],
+  "acceptance_criteria": [
+    "All Python files parse without syntax errors (python3 -c 'import ast; ast.parse(open(f).read())')",
+    "The API handler routes are correctly mapped and return appropriate HTTP status codes",
+    "The poller handler integrates with DynamoDB booking records instead of being standalone",
+    "Conflict detection returns 409 when same instance type booking already exists",
+    "Notification dispatch supports both email (SNS) and Feishu webhook (HTTP POST)",
+    "IP whitelist management creates/updates security group rules for port 30080",
+    "CDK stack properly wires these Lambda handlers with correct IAM permissions and environment variables"
+  ],
+  "verification": [
+    "cd platform && npm run build",
+    "cd platform && npx cdk synth --quiet",
+    "for f in $(find platform/lambda -name '*.py'); do python3 -c \"import ast; ast.parse(open('$f').read())\"; done",
+    "cd platform && npm test"
+  ],
+  "blocked_reason": null,
+  "findings": "All 12 existing tests pass. CDK synth produces valid CloudFormation. Used Code.fromAsset('./lambda/api'), Code.fromAsset('./lambda/poller'), Code.fromAsset('./lambda/deployer') for the three handlers. Handler entry points are handler.handler (not index.handler). Deployment plan b200-tp8-unified references docker-compose-tp8-b200.yaml which does not exist yet in the repo (noted in description). The API handler uses boto3.dynamodb.conditions for query filters which requires boto3 to be importable (it is in Lambda runtime)."
+}

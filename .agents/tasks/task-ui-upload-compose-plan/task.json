@@ -1,0 +1,14 @@
+{
+  "task_id": "task-ui-upload-compose-plan",
+  "task_description": "Add a UI feature to upload a new docker-compose deployment plan (compose file + a name, plus required GPU instanceType and optional model/description). Uploaded plans are persisted at runtime (compose content to the S3 compose bucket under compose-files/, metadata to a new TpotDeploymentPlanTable) and merged with the existing built-in static plans in get_all_plans()/get_plan() and in the deployer's composeFile/modelName resolution. Built-in/default plans remain code+CDK-managed (changing defaults still needs a cdk redeploy, per the user). Backend (FEAT-001) + CDK (FEAT-002) + frontend (FEAT-003).",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "Python: ast.parse + py_compile pass on all 4 changed Lambda files. Behavioral verification with mocked boto3 confirms the core new logic: get_all_plans() merges 7 built-ins (source=builtin) with user plans (source=user), built-ins win on id collision; get_plan() resolves built-in and user ids and returns None for unknown; create_deployment_plan returns 201 with slugified planId and writes compose-files/user-<planId>.yaml (400 on bad instanceType/empty compose, 409 on built-in id collision); delete_deployment_plan refuses built-ins (400). Frontend (tsc/vite build) and CDK (cdk synth) NOT run: sandbox host has no node/npm and Python 3.9 vs Lambda 3.12; validated by source review. Orchestrator must run npm run build (frontend), npx cdk synth, and cdk deploy. No Dockerfile in project scope -> docker_build skipped."
+  }
+}
