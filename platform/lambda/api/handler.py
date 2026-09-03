@@ -16,6 +16,7 @@ Routes:
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -46,6 +47,26 @@ NOTIFICATION_CONFIG_TABLE = os.environ.get(
 )
 NOTIFICATION_TOPIC_ARN = os.environ.get("NOTIFICATION_TOPIC_ARN", "")
 DEPLOYER_FUNCTION_NAME = os.environ.get("DEPLOYER_FUNCTION_NAME", "tpot-booking-deployer")
+COMPOSE_BUCKET = os.environ.get("COMPOSE_BUCKET", "")
+DEPLOYMENT_PLAN_TABLE = os.environ.get(
+    "DEPLOYMENT_PLAN_TABLE", "TpotDeploymentPlanTable"
+)
+
+# Instance types allowed for user-uploaded deployment plans. This mirrors the
+# instance types used by the built-in plans today; extend as new GPU families
+# are supported.
+ALLOWED_INSTANCE_TYPES = {
+    "p5en.48xlarge",
+    "p6-b300.48xlarge",
+}
+
+# Default recipe/model reused from the built-in plans for user uploads that do
+# not override them.
+DEFAULT_PLAN_RECIPE = "recipes/b300-pd-hold.env"
+DEFAULT_PLAN_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
+
+# Maximum accepted compose content size (512 KB).
+MAX_COMPOSE_BYTES = 512 * 1024
 
 dynamodb = boto3.resource("dynamodb")
 
@@ -70,6 +91,10 @@ def _get_booking_table():
 
 def _get_notification_table():
     return dynamodb.Table(NOTIFICATION_CONFIG_TABLE)
+
+
+def _get_plan_table():
+    return dynamodb.Table(DEPLOYMENT_PLAN_TABLE)
 
 
 def _invoke_deployer(instance_id: str, booking_id: str) -> None:
@@ -482,6 +507,272 @@ def get_status() -> dict:
     })
 
 
+# ─── Deployment Plan Handlers ───────────────────────────────────────────────
+
+
+def _slugify_plan_id(name: str) -> str:
+    """Derive a safe plan id from a name.
+
+    Lowercases, replaces any run of non [a-z0-9] characters with a single
+    hyphen, and strips leading/trailing hyphens. Returns '' when nothing
+    usable remains.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower())
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug
+
+
+def _fallback_has_services_mapping(content: str) -> bool:
+    """Structural check for a top-level `services:` mapping without PyYAML.
+
+    The AWS Lambda Python runtime does not bundle PyYAML, and the API Lambda is
+    packaged as a plain asset with no pip/vendoring step, so this fallback must
+    itself be a meaningful check rather than a loose substring match. The
+    compose content is later executed on a GPU host via SSM, so we require the
+    document to actually declare a top-level `services:` block with at least one
+    indented child entry, which is the minimum shape of a real compose file.
+
+    Recognizes a line of the form `services:` (an empty mapping opener followed
+    by indented children) or an inline `services: {...}` mapping. Ignores blank
+    and comment lines.
+    """
+    lines = content.splitlines()
+    for idx, line in enumerate(lines):
+        # A top-level key has no leading whitespace.
+        if line != line.lstrip():
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not stripped.startswith("services:"):
+            continue
+
+        remainder = stripped[len("services:"):].strip()
+        if remainder:
+            # Inline form, e.g. `services: {web: {...}}`. Require a non-empty,
+            # non-comment value that opens a mapping.
+            if remainder.startswith("#"):
+                return False
+            return remainder.startswith("{") and remainder != "{}"
+
+        # Block form: require at least one indented, non-blank child line before
+        # the next top-level key.
+        for child in lines[idx + 1:]:
+            child_stripped = child.strip()
+            if not child_stripped or child_stripped.startswith("#"):
+                continue
+            if child != child.lstrip():
+                return True
+            # Reached another top-level key with no children in between.
+            return False
+        return False
+    return False
+
+
+def _validate_compose_content(content: str) -> bool:
+    """Best-effort validation that compose content is a plausible compose file.
+
+    Prefer PyYAML when importable: parse and require a non-empty mapping that
+    declares a `services` section. When PyYAML is not available (the default on
+    the AWS Lambda runtime, and this Lambda has no pip/vendoring step), fall
+    back to a structural check for a top-level `services:` mapping. Both paths
+    require an actual services section so validation stays meaningful before the
+    content is executed on a host.
+    """
+    if not content or not content.strip():
+        return False
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        return _fallback_has_services_mapping(content)
+
+    try:
+        parsed = yaml.safe_load(content)
+    except yaml.YAMLError:
+        return False
+    if not isinstance(parsed, dict) or not parsed:
+        return False
+    services = parsed.get("services")
+    return isinstance(services, dict) and bool(services)
+
+
+def create_deployment_plan(body: dict) -> dict:
+    """Create a user-uploaded deployment plan.
+
+    Stores the compose content in the S3 compose bucket and the plan metadata
+    in the deployment-plan table. Returns 201 with the stored plan, 400 on
+    validation failure, 409 on id collision without overwrite.
+    """
+    name = (body.get("name") or "").strip()
+    instance_type = (body.get("instanceType") or "").strip()
+    compose_content = body.get("composeContent") or ""
+    overwrite = bool(body.get("overwrite", False))
+
+    # Validate name
+    if not name or len(name) > 100:
+        return _response(400, {"error": "name is required (1-100 chars)"})
+
+    # Validate instance type against allowlist
+    if instance_type not in ALLOWED_INSTANCE_TYPES:
+        return _response(400, {
+            "error": "Invalid instanceType",
+            "allowedInstanceTypes": sorted(ALLOWED_INSTANCE_TYPES),
+        })
+
+    # Validate compose content
+    if not isinstance(compose_content, str) or not compose_content.strip():
+        return _response(400, {"error": "composeContent is required"})
+
+    if len(compose_content.encode("utf-8")) > MAX_COMPOSE_BYTES:
+        return _response(400, {
+            "error": "composeContent exceeds 512 KB limit",
+        })
+
+    if not _validate_compose_content(compose_content):
+        return _response(400, {"error": "composeContent is not valid YAML"})
+
+    # Derive and sanitize the plan id
+    plan_id = _slugify_plan_id(name)
+    if not plan_id:
+        return _response(400, {
+            "error": "name must contain alphanumeric characters",
+        })
+
+    # Reject collision with a built-in plan id
+    builtin_ids = {p["id"] for p in get_all_plans() if p.get("source") == "builtin"}
+    if plan_id in builtin_ids:
+        return _response(409, {
+            "error": "Plan id collides with a built-in plan",
+            "planId": plan_id,
+        })
+
+    # Reject collision with an existing user plan unless overwrite requested
+    table = _get_plan_table()
+    if not overwrite:
+        try:
+            existing = table.get_item(Key={"planId": plan_id}).get("Item")
+            if existing:
+                return _response(409, {
+                    "error": "Plan id already exists; set overwrite=true to replace",
+                    "planId": plan_id,
+                })
+        except ClientError as e:
+            logger.error("Error checking existing plan %s: %s", plan_id, e)
+            return _response(500, {"error": "Failed to check existing plans"})
+
+    # Sanitize the compose file name (no path separators, no ..)
+    compose_file = f"user-{plan_id}.yaml"
+    if "/" in compose_file or "\\" in compose_file or ".." in compose_file:
+        return _response(400, {"error": "Invalid derived compose file name"})
+
+    # `recipe` is reserved for future use. The deployer resolves user plans by
+    # composeFile + modelName only and does not consume recipe today; it is
+    # persisted so the record shape matches the built-in plans (which carry a
+    # recipe field) and so a future deployer change can wire it in without a
+    # data migration.
+    recipe = (body.get("recipe") or DEFAULT_PLAN_RECIPE).strip() or DEFAULT_PLAN_RECIPE
+    description = (body.get("description") or "").strip()
+    model_name = (body.get("modelName") or DEFAULT_PLAN_MODEL).strip() or DEFAULT_PLAN_MODEL
+
+    # Write compose content to S3
+    if not COMPOSE_BUCKET:
+        return _response(500, {"error": "Compose bucket is not configured"})
+    try:
+        s3 = boto3.client("s3")
+        s3.put_object(
+            Bucket=COMPOSE_BUCKET,
+            Key=f"compose-files/{compose_file}",
+            Body=compose_content.encode("utf-8"),
+            ContentType="text/yaml",
+        )
+    except ClientError as e:
+        logger.error("Failed to write compose file %s: %s", compose_file, e)
+        return _response(500, {"error": "Failed to store compose file"})
+
+    # Persist plan metadata to the table
+    now = datetime.now(timezone.utc).isoformat()
+    item = {
+        "planId": plan_id,
+        "id": plan_id,
+        "name": name,
+        "instanceType": instance_type,
+        "composeFile": compose_file,
+        "recipe": recipe,
+        "description": description,
+        "modelName": model_name,
+        "source": "user",
+        "createdAt": now,
+    }
+    try:
+        table.put_item(Item=item)
+    except ClientError as e:
+        logger.error("Failed to persist plan %s: %s", plan_id, e)
+        # The compose object was written before the metadata row. On a table
+        # write failure, best-effort delete the S3 object so it is not left
+        # orphaned with no plan record pointing at it.
+        try:
+            s3.delete_object(
+                Bucket=COMPOSE_BUCKET,
+                Key=f"compose-files/{compose_file}",
+            )
+        except ClientError as cleanup_err:
+            logger.warning(
+                "Failed to clean up orphaned compose file %s: %s",
+                compose_file,
+                cleanup_err,
+            )
+        return _response(500, {"error": "Failed to store deployment plan"})
+
+    return _response(201, item)
+
+
+def list_deployment_plans() -> dict:
+    """List all deployment plans (built-in + user)."""
+    return _response(200, {"plans": get_all_plans()})
+
+
+def delete_deployment_plan(plan_id: str) -> dict:
+    """Delete a user deployment plan. Refuses to delete built-in plans."""
+    plan_id = (plan_id or "").strip()
+    if not plan_id:
+        return _response(400, {"error": "planId is required"})
+
+    # Refuse to delete built-in plans
+    builtin_ids = {p["id"] for p in get_all_plans() if p.get("source") == "builtin"}
+    if plan_id in builtin_ids:
+        return _response(400, {"error": "Cannot delete a built-in deployment plan"})
+
+    table = _get_plan_table()
+    try:
+        item = table.get_item(Key={"planId": plan_id}).get("Item")
+    except ClientError as e:
+        logger.error("Error getting plan %s: %s", plan_id, e)
+        return _response(500, {"error": "Failed to look up deployment plan"})
+
+    if not item:
+        return _response(404, {"error": "Deployment plan not found"})
+
+    # Best-effort delete of the S3 compose object
+    compose_file = item.get("composeFile", "")
+    if compose_file and COMPOSE_BUCKET:
+        try:
+            s3 = boto3.client("s3")
+            s3.delete_object(
+                Bucket=COMPOSE_BUCKET,
+                Key=f"compose-files/{compose_file}",
+            )
+        except ClientError as e:
+            logger.warning("Failed to delete compose file %s: %s", compose_file, e)
+
+    try:
+        table.delete_item(Key={"planId": plan_id})
+    except ClientError as e:
+        logger.error("Failed to delete plan %s: %s", plan_id, e)
+        return _response(500, {"error": "Failed to delete deployment plan"})
+
+    return _response(200, {"message": "Deployment plan deleted", "planId": plan_id})
+
+
 # ─── Router ─────────────────────────────────────────────────────────────────
 
 
@@ -525,6 +816,16 @@ def handler(event, context):
             return update_notification_config(body)
         elif resource == "/notifications/test-webhook" and http_method == "POST":
             return test_feishu_webhook(body)
+
+        # /deployment-plans
+        elif resource == "/deployment-plans" and http_method == "POST":
+            return create_deployment_plan(body)
+        elif resource == "/deployment-plans" and http_method == "GET":
+            return list_deployment_plans()
+
+        # /deployment-plans/{planId}
+        elif resource == "/deployment-plans/{planId}" and http_method == "DELETE":
+            return delete_deployment_plan(path_params.get("planId", ""))
 
         # /status
         elif resource == "/status" and http_method == "GET":

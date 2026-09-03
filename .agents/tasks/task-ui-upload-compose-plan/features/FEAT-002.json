@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "CDK wiring for the backend from FEAT-001: create the TpotDeploymentPlanTable DynamoDB table, add the /deployment-plans API Gateway resource + methods (POST, GET) and /deployment-plans/{planId} (DELETE), grant the API Lambda read/write on the new table and PutObject/DeleteObject on the compose bucket, add COMPOSE_BUCKET + DEPLOYMENT_PLAN_TABLE env to the API Lambda, and grant the deployer Lambda read on the new table + add DEPLOYMENT_PLAN_TABLE env. Depends on FEAT-001 (route names + env var names must match).",
+  "status": "completed",
+  "steps": [
+    "In platform/lib/tpot-booking-stack.ts, after notificationConfigTable, add a new DynamoDB table: const deploymentPlanTable = new dynamodb.Table(this,'DeploymentPlanTable',{ tableName:'TpotDeploymentPlanTable', partitionKey:{name:'planId',type:dynamodb.AttributeType.STRING}, billingMode:dynamodb.BillingMode.PAY_PER_REQUEST, removalPolicy:cdk.RemovalPolicy.DESTROY });",
+    "Grant the apiHandlerRole read/write on the new table: add deploymentPlanTable.tableArn to the existing DynamoDB PolicyStatement resources (the one already listing bookingTable + notificationConfigTable), which already includes GetItem/PutItem/UpdateItem/DeleteItem/Query/Scan.",
+    "Grant the apiHandler S3 write on the compose bucket: add a PolicyStatement with actions ['s3:PutObject','s3:DeleteObject','s3:GetObject'] and resources [`${composeBucket.bucketArn}/*`] to apiHandlerRole (the existing S3 statement is scoped to frontendBucket only).",
+    "Add environment variables to the apiHandler lambda.Function environment block: COMPOSE_BUCKET: composeBucket.bucketName and DEPLOYMENT_PLAN_TABLE: deploymentPlanTable.tableName. (composeBucket is defined earlier in the stack so it is in scope.)",
+    "Grant the deployerRole read on the new table: add a PolicyStatement with actions ['dynamodb:GetItem'] and resources [deploymentPlanTable.tableArn]; add DEPLOYMENT_PLAN_TABLE: deploymentPlanTable.tableName to the deployer lambda.Function environment block.",
+    "Wire the API Gateway resource in the API Gateway Integration section (near the /status resource): const deploymentPlans = api.root.addResource('deployment-plans'); deploymentPlans.addMethod('GET', apiIntegration); deploymentPlans.addMethod('POST', apiIntegration); const deploymentPlanById = deploymentPlans.addResource('{planId}'); deploymentPlanById.addMethod('DELETE', apiIntegration);",
+    "Optionally add a CfnOutput for the new table name mirroring the existing outputs (nice-to-have, not required)."
+  ],
+  "acceptance_criteria": [
+    "TpotDeploymentPlanTable (pk planId, PAY_PER_REQUEST) is declared in the stack.",
+    "apiHandlerRole has DynamoDB rw including the new table ARN and S3 PutObject/DeleteObject/GetObject on composeBucket/*.",
+    "apiHandler lambda has COMPOSE_BUCKET and DEPLOYMENT_PLAN_TABLE env vars; deployer lambda has DEPLOYMENT_PLAN_TABLE env and dynamodb:GetItem on the new table ARN.",
+    "API Gateway exposes GET+POST /deployment-plans and DELETE /deployment-plans/{planId} bound to apiIntegration.",
+    "The env var names and route paths exactly match those used by FEAT-001 Python code."
+  ],
+  "verification": [
+    "Source review of platform/lib/tpot-booking-stack.ts confirming the table, IAM statements, env vars, and API Gateway resources/methods are present and reference composeBucket/deploymentPlanTable correctly.",
+    "If node/npm are available: cd platform && npm install && npx cdk synth (validates the stack compiles and synthesizes the new table/route/IAM). If not available, note it as skipped due to sandbox constraints."
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented all 7 steps in platform/lib/tpot-booking-stack.ts (only file changed): (1) added deploymentPlanTable DynamoDB table (tableName TpotDeploymentPlanTable, pk planId STRING, PAY_PER_REQUEST, removalPolicy DESTROY) directly after notificationConfigTable; (2) appended deploymentPlanTable.tableArn to the existing apiHandlerRole DynamoDB PolicyStatement (GetItem/PutItem/UpdateItem/DeleteItem/Query/Scan); (3) added a new apiHandlerRole S3 PolicyStatement ['s3:PutObject','s3:DeleteObject','s3:GetObject'] on `${composeBucket.bucketArn}/*` (left the frontendBucket statement untouched); (4) added COMPOSE_BUCKET and DEPLOYMENT_PLAN_TABLE env vars to the apiHandler Function; (5) added deployerRole ['dynamodb:GetItem'] statement on deploymentPlanTable.tableArn plus DEPLOYMENT_PLAN_TABLE env var on the deployer Function; (6) wired API Gateway /deployment-plans (GET+POST) and /deployment-plans/{planId} (DELETE) to apiIntegration right after the /status resource; (7) added a CfnOutput DeploymentPlanTableName mirroring existing outputs. Verified against the FEAT-001 Python contract via grep: env names COMPOSE_BUCKET and DEPLOYMENT_PLAN_TABLE (default TpotDeploymentPlanTable), DynamoDB key 'planId', S3 key prefix 'compose-files/<file>', and router branches for '/deployment-plans' GET/POST and '/deployment-plans/{planId}' DELETE all match exactly (handler.py, deployment_plans.py, deployer/handler.py). cdk synth / tsc were NOT run: the sandbox host has no node/npm (per context.json), so validation was by careful static source review (syntax, in-scope identifiers composeBucket/deploymentPlanTable/apiHandlerRole/deployerRole/apiIntegration/api). cdk synth is deferred to the orchestrator, which has node and performs the deploy. Did not commit; orchestrator handles commits per briefing."
+}

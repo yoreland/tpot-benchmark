@@ -76,7 +76,7 @@ const BookingPage: React.FC = () => {
               onChange={setSelectedPlan}
               options={plans.map((plan) => ({
                 value: plan.id,
-                label: `${plan.name} - ${plan.instanceType} - ${plan.description}`,
+                label: `${plan.name}${plan.source === 'user' ? ' (自定义)' : ''} - ${plan.instanceType} - ${plan.description}`,
               }))}
               size="large"
             />

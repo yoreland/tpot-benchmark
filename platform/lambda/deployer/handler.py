@@ -33,6 +33,9 @@ logger.setLevel(logging.INFO)
 # ─── Configuration ──────────────────────────────────────────────────────────
 
 BOOKING_TABLE = os.environ.get("BOOKING_TABLE", "TpotBookingTable")
+DEPLOYMENT_PLAN_TABLE = os.environ.get(
+    "DEPLOYMENT_PLAN_TABLE", "TpotDeploymentPlanTable"
+)
 NOTIFICATION_TOPIC_ARN = os.environ.get("NOTIFICATION_TOPIC_ARN", "")
 PROJECT_TAG = "tpot-benchmark"
 SGLANG_PORT = 30080
@@ -89,6 +92,25 @@ def _get_booking_by_id(booking_id: str) -> dict:
         return resp.get("Item", {})
     except ClientError as e:
         logger.error("Failed to get booking %s: %s", booking_id, e)
+    return {}
+
+
+def _get_plan_record(plan_id: str) -> dict:
+    """Fetch a user deployment plan record from DynamoDB by plan id.
+
+    The deployer cannot import the API's deployment_plans module, so it reads
+    the persisted plan record directly. Returns {} on missing record or error.
+    """
+    if not plan_id:
+        return {}
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table(DEPLOYMENT_PLAN_TABLE)
+
+    try:
+        resp = table.get_item(Key={"planId": plan_id})
+        return resp.get("Item", {})
+    except ClientError as e:
+        logger.error("Failed to get plan record %s: %s", plan_id, e)
     return {}
 
 
@@ -521,6 +543,15 @@ def _handle_deploy(event):
 
     # Determine model name for this plan
     model_name = PLAN_MODEL_MAP.get(deployment_plan, DEFAULT_MODEL_NAME)
+
+    # For dynamic (user-uploaded) plans - those not in the hardcoded built-in
+    # map - resolve composeFile and modelName from the persisted plan record.
+    # Built-in plan ids keep their hardcoded resolution above.
+    if deployment_plan not in plan_compose_map:
+        plan_record = _get_plan_record(deployment_plan)
+        if plan_record:
+            compose_file = plan_record.get("composeFile") or compose_file
+            model_name = plan_record.get("modelName") or model_name
 
     ssm_client = boto3.client("ssm", region_name=region)
 

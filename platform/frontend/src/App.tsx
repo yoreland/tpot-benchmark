@@ -8,9 +8,11 @@ import {
   SettingOutlined,
   LogoutOutlined,
   CloudServerOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons';
 import { setCredentials, getCredentials, clearCredentials, getStatus } from './api/client';
 import BookingPage from './pages/BookingPage';
+import PlansPage from './pages/PlansPage';
 import MonitoringPage from './pages/MonitoringPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
@@ -29,6 +31,7 @@ const AWS_THEME = {
 
 const NAV_ITEMS = [
   { key: '/', label: '创建预约', icon: <PlusCircleOutlined /> },
+  { key: '/plans', label: '方案管理', icon: <CloudUploadOutlined /> },
   { key: '/monitoring', label: '实时监控', icon: <DashboardOutlined /> },
   { key: '/history', label: '历史记录', icon: <HistoryOutlined /> },
   { key: '/settings', label: '通知设置', icon: <SettingOutlined /> },
@@ -36,6 +39,7 @@ const NAV_ITEMS = [
 
 const BREADCRUMB_MAP: Record<string, string> = {
   '/': '创建预约',
+  '/plans': '方案管理',
   '/monitoring': '实时监控',
   '/history': '历史记录',
   '/settings': '通知设置',
@@ -223,6 +227,7 @@ const App: React.FC = () => {
             >
               <Routes>
                 <Route path="/" element={<BookingPage />} />
+                <Route path="/plans" element={<PlansPage />} />
                 <Route path="/monitoring" element={<MonitoringPage />} />
                 <Route path="/history" element={<HistoryPage />} />
                 <Route path="/settings" element={<SettingsPage />} />

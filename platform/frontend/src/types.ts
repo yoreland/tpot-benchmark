@@ -28,6 +28,19 @@ export interface DeploymentPlan {
   name: string;
   instanceType: string;
   description: string;
+  source?: 'builtin' | 'user';
+  modelName?: string;
+  composeFile?: string;
+}
+
+export interface CreateDeploymentPlanRequest {
+  name: string;
+  instanceType: string;
+  composeContent: string;
+  modelName?: string;
+  description?: string;
+  recipe?: string;
+  overwrite?: boolean;
 }
 
 export interface NotificationConfig {

@@ -41,6 +41,13 @@ export class TpotBookingStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    const deploymentPlanTable = new dynamodb.Table(this, 'DeploymentPlanTable', {
+      tableName: 'TpotDeploymentPlanTable',
+      partitionKey: { name: 'planId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ─── SNS Topic ─────────────────────────────────────────────────────
 
     const notificationTopic = new sns.Topic(this, 'NotificationTopic', {
@@ -222,6 +229,7 @@ def generate_policy(principal_id, effect, resource):
         bookingTable.tableArn,
         `${bookingTable.tableArn}/index/*`,
         notificationConfigTable.tableArn,
+        deploymentPlanTable.tableArn,
       ],
     }));
 
@@ -241,6 +249,11 @@ def generate_policy(principal_id, effect, resource):
     apiHandlerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['s3:GetObject', 's3:PutObject'],
       resources: [`${frontendBucket.bucketArn}/*`],
+    }));
+
+    apiHandlerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['s3:PutObject', 's3:DeleteObject', 's3:GetObject'],
+      resources: [`${composeBucket.bucketArn}/*`],
     }));
 
     apiHandlerRole.addToPolicy(new iam.PolicyStatement({
@@ -269,6 +282,8 @@ def generate_policy(principal_id, effect, resource):
         BOOKING_TABLE: bookingTable.tableName,
         NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
         NOTIFICATION_TOPIC_ARN: notificationTopic.topicArn,
+        COMPOSE_BUCKET: composeBucket.bucketName,
+        DEPLOYMENT_PLAN_TABLE: deploymentPlanTable.tableName,
       },
     });
 
@@ -313,6 +328,11 @@ def generate_policy(principal_id, effect, resource):
     }));
 
     deployerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'],
+      resources: [deploymentPlanTable.tableArn],
+    }));
+
+    deployerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['sns:Publish'],
       resources: [notificationTopic.topicArn],
     }));
@@ -345,6 +365,7 @@ def generate_policy(principal_id, effect, resource):
         NOTIFICATION_CONFIG_TABLE: notificationConfigTable.tableName,
         MODEL_NAME: this.node.tryGetContext('modelName') ?? 'deepseek-ai/DeepSeek-V4-Flash',
         COMPOSE_BUCKET: composeBucket.bucketName,
+        DEPLOYMENT_PLAN_TABLE: deploymentPlanTable.tableName,
       },
     });
 
@@ -572,6 +593,14 @@ def generate_policy(principal_id, effect, resource):
     const status = api.root.addResource('status');
     status.addMethod('GET', apiIntegration);
 
+    // /deployment-plans resource
+    const deploymentPlans = api.root.addResource('deployment-plans');
+    deploymentPlans.addMethod('GET', apiIntegration);
+    deploymentPlans.addMethod('POST', apiIntegration);
+
+    const deploymentPlanById = deploymentPlans.addResource('{planId}');
+    deploymentPlanById.addMethod('DELETE', apiIntegration);
+
     // ─── CloudFront API Proxy ──────────────────────────────────────────
     // Add /api/* behavior to CloudFront so the frontend can call relative paths
     // instead of requiring VITE_API_URL to be baked at build time.
@@ -628,6 +657,12 @@ function handler(event) {
       value: notificationConfigTable.tableName,
       description: 'Notification config DynamoDB table name',
       exportName: 'TpotNotificationConfigTableName',
+    });
+
+    new cdk.CfnOutput(this, 'DeploymentPlanTableName', {
+      value: deploymentPlanTable.tableName,
+      description: 'Deployment plan DynamoDB table name',
+      exportName: 'TpotDeploymentPlanTableName',
     });
 
     new cdk.CfnOutput(this, 'NotificationTopicArn', {

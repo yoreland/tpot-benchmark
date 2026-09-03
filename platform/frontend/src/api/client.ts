@@ -1,6 +1,8 @@
 import type {
   Booking,
   ConflictResponse,
+  CreateDeploymentPlanRequest,
+  DeploymentPlan,
   NotificationConfig,
   StatusResponse,
 } from '../types';
@@ -116,5 +118,25 @@ export async function testFeishuWebhook(webhook: string): Promise<{ message: str
   return request<{ message: string }>('/notifications/test-webhook', {
     method: 'POST',
     body: JSON.stringify({ webhook }),
+  });
+}
+
+export async function createDeploymentPlan(
+  req: CreateDeploymentPlanRequest,
+): Promise<DeploymentPlan> {
+  return request<DeploymentPlan>('/deployment-plans', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}
+
+export async function listDeploymentPlans(): Promise<DeploymentPlan[]> {
+  const resp = await request<{ plans: DeploymentPlan[] }>('/deployment-plans');
+  return resp.plans;
+}
+
+export async function deleteDeploymentPlan(planId: string): Promise<void> {
+  return request<void>(`/deployment-plans/${encodeURIComponent(planId)}`, {
+    method: 'DELETE',
   });
 }
