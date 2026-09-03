@@ -358,7 +358,23 @@ def _get_compose_commands(deployment_plan: str, compose_file: str, model_name: s
         "fi",
         f"echo 'Downloading model weights from HuggingFace: {model_name}'",
         "pip3 install -q huggingface_hub",
-        f"python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('{model_name}', local_dir='{model_local_path}')\"",
+        # Lengthen per-file network timeout for large-model downloads.
+        "export HF_HUB_DOWNLOAD_TIMEOUT=60",
+        # Resilient download: retry with resume. snapshot_download re-uses the
+        # partially-downloaded local_dir on each attempt, so retries make
+        # forward progress instead of restarting. Each python attempt is
+        # allowed to fail without tripping `set -e`; only total failure exits.
+        "ok=0",
+        "for attempt in $(seq 1 10); do",
+        f"  echo \"Model download attempt $attempt/10 for {model_name}\"",
+        f"  if python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('{model_name}', local_dir='{model_local_path}')\"; then",
+        "    ok=1",
+        "    break",
+        "  fi",
+        "  echo \"Model download attempt $attempt failed; retrying after 20s...\" >&2",
+        "  sleep 20",
+        "done",
+        "if [ \"$ok\" != 1 ]; then echo 'model download failed after 10 attempts' >&2; exit 1; fi",
         "echo 'Model download from HuggingFace completed'",
         # ─── Step 3a: Force stop ALL existing containers (GPU memory release) ───
         "echo '=== Step 3a: Stopping all existing containers ==='",
