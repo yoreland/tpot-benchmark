@@ -114,7 +114,17 @@ TP8 baseline (same 口径, from the prior `b300-vllm-nvfp4-dspark-20260913` run)
 | 8  | 1064.67 → 881.15| 6.00 → 6.61     | 8.74 → 13.78     | 224.70 → **153.29** |
 | 16 | 1458.79 → 1236.75| 8.71 → 8.99    | 19.85 → 23.22    | 240.12 → 256.82 |
 
-(Bold = PD improved on TP8.)
+(Bold = PD improved on TP8. The c1 out tok/s cell 218.24 → 217.74 is a negligible
+PD *regression* within run-to-run noise, so it is intentionally not bolded.)
+
+> **Caveat — DSpark acceptance is unverified on the PD side.** This TPOT comparison
+> implicitly assumes comparable DSpark speculative-decode acceptance across the two
+> runs. The TP8 baseline reported accept rates of 11-21% (accept-length ~1.78-2.48),
+> but those stats are **not observable through the disagg proxy** on the PD side
+> (see the note above). DSpark is confirmed configured identically on both sides,
+> yet realized acceptance could still differ. A slice of any TPOT delta below could
+> therefore reflect a spec-decode-acceptance difference rather than the topology
+> alone.
 
 ### Verdict
 
