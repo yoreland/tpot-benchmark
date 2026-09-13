@@ -1,0 +1,37 @@
+{
+  "project_type": "Benchmark/ops repo (bash + python) driving LLM serving benchmarks on remote B300 GPU EC2. This task is LIVE-INSTANCE OPS driven entirely over AWS SSM send-command, not local code development.",
+  "language": "bash + python (orchestration); vLLM (nightly) is the system under test on the remote instance",
+  "build_system": "No build. Deliverable is a benchmark run + markdown summary in docs/run-summaries/.",
+  "test_framework": "N/A for this task (repo has tests/run-tests.sh for its shell scripts, but this task adds no shell scripts to the repo, only a summary doc and SSM-driven ops).",
+  "build_command": "N/A",
+  "test_command": "N/A (verification is: proxy /health 200 + all 5 bench concurrency levels produce result JSON with 0 failed requests)",
+  "verification_instructions": "1) prefill instance (:8100) and decode instance (:8200) each return /health 200 with gpumem>0 on their 4 GPUs. 2) proxy on :30080 /health 200. 3) A smoke /v1/chat/completions through :30080 returns a valid completion. 4) All 5 bench levels (c=1,2,4,8,16) produce /opt/dlami/nvme/bench-out-vllm-pd/c{C}.json with completed==num_prompts and failures==0.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "Instance already running with model + image present. Access ONLY via: aws ssm send-command --region us-west-2 --instance-ids i-07a1fb189f180ff3e --document-name AWS-RunShellScript --parameters 'commands=[...]' --query Command.CommandId --output text ; poll with aws ssm get-command-invocation --region us-west-2 --command-id <ID> --instance-id i-07a1fb189f180ff3e. Long-running steps (starting servers, bench) MUST be backgrounded with nohup + logfile + tail-poll, or use --timeout-seconds, because they exceed send-command default execution timeout.",
+  "environment_constraints": "Network mode for the sandbox host: only the connected GitHub repo is reachable. ALL GPU/serving work happens on the remote B300 via SSM. No interactive SSM session (session-manager-plugin absent; start-session blocked). Security group tpot-bench-noingress-sg has NO ingress; public endpoint unreachable => all serving+bench run on the instance's loopback (127.0.0.1). DO NOT stop the instance or DELETE any booking (irreversible teardown is handled by the orchestrator after results).",
+  "contribution_requirements": "No PR/push required. Output is a report back to the orchestrator plus an optional summary doc committed locally at docs/run-summaries/b300-vllm-pd-4p4d-20260913-summary.md (parallel to the existing b300-vllm-nvfp4-dspark-20260913-summary.md).",
+  "key_patterns": "PREVIOUS TP8 RUN (baseline to beat on TPOT/ITL): image vllm/vllm-openai:nightly (vLLM 0.29.1rc1.dev9), model /opt/dlami/nvme/models/nvidia__DeepSeek-V4-Flash-nvfp4-DSpark, served-model-name dsv4-nvfp4-dspark. Required flags proven working: --trust-remote-code --kv-cache-dtype fp8 (mandatory for DeepSeek-V4 fp8_ds_mla KV) --reasoning-parser deepseek_v4 --tool-call-parser deepseek_v4 --enable-auto-tool-choice --max-model-len 133120 ; env -e VLLM_USE_V1=1 -e HF_HUB_OFFLINE=1 -e NVIDIA_VISIBLE_DEVICES=... ; DSpark spec decode --speculative-config '{\"method\":\"dspark\",\"num_speculative_tokens\":7,\"draft_sample_method\":\"greedy\"}'. Container run flags: --network host --ipc host --shm-size 32g -v /opt/dlami/nvme:/opt/dlami/nvme -v hfcache:/root/.cache/huggingface. NVFP4 MoE (TRT-LLM fused MoE + UE8M0 DeepGEMM) auto-activates on B300. KV CONNECTOR GATE ALREADY PASSED on the image: nixl installed (nixl_agent OK), NixlConnector registered in KVConnectorFactory. Reference NIXL disagg proxy at /vllm-workspace/examples/disaggregated/lmcache/disagg_prefill_lmcache_v1/disagg_proxy_server.py is model-agnostic and reusable as-is (sends prefill req with max_tokens=1, then streams from decoder). NIXL side channel: env VLLM_NIXL_SIDE_CHANNEL_PORT (default 5600) must be UNIQUE per instance; VLLM_NIXL_SIDE_CHANNEL_HOST default localhost. UCX_TLS=cuda_ipc,cuda_copy,tcp for intra-node NVLink transfer. BENCH GOTCHA: this nightly rejects --random-range-ratio 1.0; use --random-range-ratio 0.0 for fixed 40k input.",
+  "relevant_files": [
+    "docs/run-summaries/b300-vllm-nvfp4-dspark-20260913-summary.md (previous TP8 run, the baseline + exact working flags)",
+    "docs/RUNBOOK.md (general ops context)",
+    "reports/b300-pd-customer-validation-20260810/ (prior SGLang PD material, conceptual only)",
+    "docs/b300-pd-3p1d-plan-review.md (prior SGLang 3P1D plan, conceptual only; that stack differs - vLLM NIXL here, not SGLang mooncake)"
+  ],
+  "directory_structure": "docs/run-summaries/ holds per-run markdown summaries; reports/ holds detailed report bundles; scripts/ holds the repo's own bench shell scripts (not modified by this task); infra/ has lambda capacity poller. The live instance holds: model at /opt/dlami/nvme/models/nvidia__DeepSeek-V4-Flash-nvfp4-DSpark, the running vllm-tp8 container, and the vllm-openai:nightly image with disagg examples baked in at /vllm-workspace/examples/disaggregated/.",
+  "instance": {
+    "account": "077090643075",
+    "region": "us-west-2",
+    "instance_id": "i-07a1fb189f180ff3e",
+    "type": "p6-b300.48xlarge (8x B300, 275GB/card)",
+    "current_container": "vllm-tp8 (vllm/vllm-openai:nightly) - AUTHORIZED to docker rm -f to free all 8 GPUs",
+    "model_path": "/opt/dlami/nvme/models/nvidia__DeepSeek-V4-Flash-nvfp4-DSpark"
+  },
+  "tp8_baseline_ms": {
+    "note": "40k input / 1.5k output, random fixed-length, latencies in ms. Goal of PD 4P4D is to lower TPOT and stabilize ITL p99 (which spiked to 224-240ms at c>=8 due to prefill blocking decode).",
+    "c1":  {"out_tok_s": 218.24, "ttft_med": 747.70, "ttft_p99": 2259.72, "tpot_med": 3.17, "tpot_p99": 6.89,  "itl_med": 7.04,  "itl_p99": 13.98},
+    "c2":  {"out_tok_s": 509.66, "ttft_med": 191.89, "ttft_p99": 2398.15, "tpot_med": 3.39, "tpot_p99": 3.72,  "itl_med": 7.52,  "itl_p99": 14.08},
+    "c4":  {"out_tok_s": 812.19, "ttft_med": 394.16, "ttft_p99": 812.32,  "tpot_med": 4.27, "tpot_p99": 6.08,  "itl_med": 8.64,  "itl_p99": 17.40},
+    "c8":  {"out_tok_s": 1064.67,"ttft_med": 786.90, "ttft_p99": 3203.82, "tpot_med": 6.00, "tpot_p99": 8.74,  "itl_med": 9.99,  "itl_p99": 224.70},
+    "c16": {"out_tok_s": 1458.79,"ttft_med": 769.22, "ttft_p99": 3937.24, "tpot_med": 8.71, "tpot_p99": 19.85, "itl_med": 11.24, "itl_p99": 240.12}
+  }
+}

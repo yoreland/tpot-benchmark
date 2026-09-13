@@ -1,0 +1,27 @@
+{
+  "id": "FEAT-001",
+  "type": "chore",
+  "description": "Tear down the existing vllm-tp8 single-instance container to free all 8 B300 GPUs, and confirm the instance baseline (image, model, NIXL, NixlConnector) is ready for the PD 4P4D build. This is LIVE-INSTANCE ops over AWS SSM only. Do NOT stop the instance or delete any booking.",
+  "status": "completed",
+  "steps": [
+    "All commands run via: aws ssm send-command --region us-west-2 --instance-ids i-07a1fb189f180ff3e --document-name AWS-RunShellScript --parameters 'commands=[...]' --query Command.CommandId --output text ; then poll aws ssm get-command-invocation --region us-west-2 --command-id <ID> --instance-id i-07a1fb189f180ff3e --query '{Status:Status,Out:StandardOutputContent,Err:StandardErrorContent}' --output text",
+    "Snapshot current state first: docker ps -a; nvidia-smi memory used per GPU; curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:30080/health (expect 200 for the current tp8 server).",
+    "Tear down the running single-instance server: docker rm -f vllm-tp8",
+    "Wait ~15s then confirm all 8 GPUs freed: nvidia-smi --query-gpu=index,memory.used --format=csv,noheader must show ~0 MiB used on all 8 GPUs before proceeding. Poll up to ~90s if memory lingers.",
+    "Confirm nothing is bound on ports 30080/8100/8200/5600/5601: ss -ltnp | grep -E ':(30080|8100|8200|5600|5601)' should be empty.",
+    "Re-confirm the reusable facts on the instance (do NOT re-download anything): model dir exists at /opt/dlami/nvme/models/nvidia__DeepSeek-V4-Flash-nvfp4-DSpark; docker images | grep vllm-openai shows nightly present; docker run --rm nightly image python check that nixl imports and NixlConnector is in KVConnectorFactory registry (already verified by architect but re-confirm after teardown).",
+    "Record the freed-GPU confirmation and port-clear confirmation in this feature's findings."
+  ],
+  "acceptance_criteria": [
+    "docker rm -f vllm-tp8 succeeds and vllm-tp8 no longer appears in docker ps -a",
+    "nvidia-smi shows all 8 GPUs at ~0 MiB used",
+    "Ports 30080, 8100, 8200, 5600, 5601 are all free (no listener)",
+    "Model dir and nightly image still present; nixl + NixlConnector confirmed available"
+  ],
+  "verification": [
+    "SSM run: docker ps -a --format '{{.Names}}' | grep -c vllm-tp8 returns 0",
+    "SSM run: nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | awk '{s+=$1} END{print s}' returns a small number (< ~2000 total, i.e. all cards essentially idle)"
+  ],
+  "blocked_reason": null,
+  "findings": "Completed 2026-09-13 via AWS SSM send-command against i-07a1fb189f180ff3e (us-west-2, acct 077090643075). Instance NOT stopped, no bookings/DELETE touched; teardown limited to the docker container.\n\nPRE-TEARDOWN SNAPSHOT (cmd eb2e7850): `docker ps -a` showed `vllm-tp8  vllm/vllm-openai:nightly  Up 4 hours`; nvidia-smi reported all 8 GPUs (0-7) at 249024 MiB used; `curl http://127.0.0.1:30080/health` = 200.\n\nTEARDOWN (cmd 97b7e5ea): `docker rm -f vllm-tp8` succeeded (echoed 'vllm-tp8'); `docker ps -a` now lists no containers.\n\nFREED-GPU CONFIRMATION (cmd 4a2fc8a4, after ~15s wait):\n  - `docker ps -a --format '{{.Names}}' | grep -c vllm-tp8` => 0\n  - nvidia-smi per-GPU memory.used: GPU 0..7 all '0 MiB'\n  - Total used across all cards (awk sum) => 0 (well under the <2000 MiB threshold; no lingering, no poll needed)\n\nPORT-CLEAR CONFIRMATION (same cmd 4a2fc8a4): `ss -ltnp | grep -E ':(30080|8100|8200|5600|5601)'` => empty (printed sentinel PORTS_CLEAR). All 5 PD ports free.\n\nREUSABLE-FACTS RE-CONFIRM (cmds c84694ff + 9da4bdf4):\n  - Model dir present: /opt/dlami/nvme/models/nvidia__DeepSeek-V4-Flash-nvfp4-DSpark => MODEL_PRESENT\n  - Nightly image present: `docker images | grep vllm-openai` => vllm/vllm-openai:nightly (id 91c875065792, 30.6GB). Nothing re-downloaded.\n  - NIXL gate re-passed: `docker run --rm --entrypoint python3 vllm/vllm-openai:nightly -c 'import nixl; from nixl._api import nixl_agent; ... KVConnectorFactory'` printed `NIXL_IMPORT_OK` and `NixlConnector_registered= True`. (Note: use --entrypoint python3, not python, in this base image when overriding the entrypoint; the transient probe container has no --gpus so Triton/CUDA-runtime warnings appear but do not affect the import/registry check.)\n\nAll 4 acceptance criteria met. Instance is ready for the FEAT-002 PD 4P4D build (prefill GPUs 0-3 TP4 + decode GPUs 4-7 TP4 via NIXL)."
+}

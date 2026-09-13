@@ -1,0 +1,7 @@
+{
+  "task_id": "task-b300-vllm-pd-4p4d",
+  "task_description": "On the running B300 (i-07a1fb189f180ff3e), replace the vLLM single-instance TP8 topology with a vLLM PD-disaggregated 4P4D topology (prefill on GPUs 0-3 TP4 kv_producer, decode on GPUs 4-7 TP4 kv_consumer, NIXL KV transfer, disagg proxy on :30080), reusing the NVFP4/fp8-KV/DSpark model. Run the same-口径 40k/1.5k bench at c=1,2,4,8,16 and compare TPOT/ITL against the TP8 baseline. User's core goal: lower TPOT. All work over AWS SSM send-command; do NOT stop the instance or delete any booking.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}
