@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>B300 DeepSeek-V4-Flash DSpark: TP8 vs PD 4P4D Benchmark Report</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #ffffff;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --brand: #1d4ed8;
+    --brand-2: #0ea5e9;
+    --accent: #f59e0b;
+    --good: #059669;
+    --good-bg: #ecfdf5;
+    --bad: #dc2626;
+    --bad-bg: #fef2f2;
+    --hero-1: #0b2e6f;
+    --hero-2: #123f8f;
+    --hero-3: #1d4ed8;
+    --radius: 14px;
+    --shadow: 0 10px 30px rgba(2, 8, 23, 0.08);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: #f1f5f9;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px 80px; }
+
+  /* Hero */
+  .hero {
+    background: linear-gradient(135deg, var(--hero-1) 0%, var(--hero-2) 45%, var(--hero-3) 100%);
+    color: #fff;
+    padding: 56px 20px 64px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::after {
+    content: "";
+    position: absolute;
+    right: -120px; top: -120px;
+    width: 420px; height: 420px;
+    background: radial-gradient(circle, rgba(14,165,233,0.35), transparent 60%);
+    pointer-events: none;
+  }
+  .hero-inner { max-width: 1120px; margin: 0 auto; position: relative; z-index: 1; }
+  .hero h1 { font-size: 34px; line-height: 1.2; margin: 0 0 10px; font-weight: 800; letter-spacing: -0.01em; }
+  .hero p.sub { font-size: 17px; margin: 0 0 22px; color: #dbeafe; max-width: 820px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 10px; }
+  .badge {
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.22);
+    color: #eff6ff;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 600;
+    backdrop-filter: blur(4px);
+  }
+
+  /* KPI cards */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin: -34px 0 8px;
+  }
+  .kpi {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 18px 16px;
+    box-shadow: var(--shadow);
+  }
+  .kpi .label { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .kpi .val { font-size: 26px; font-weight: 800; margin: 6px 0 2px; color: var(--ink); }
+  .kpi .val small { font-size: 14px; font-weight: 700; color: var(--muted); }
+  .kpi .note { font-size: 12.5px; color: var(--muted); }
+  .kpi.good .val { color: var(--good); }
+  .kpi.warn .val { color: var(--accent); }
+
+  /* Sections */
+  h2.sec {
+    font-size: 22px;
+    font-weight: 800;
+    margin: 40px 0 6px;
+    padding-left: 14px;
+    border-left: 5px solid var(--brand);
+    letter-spacing: -0.01em;
+  }
+  h3.sub2 { font-size: 16px; font-weight: 700; color: var(--ink); margin: 24px 0 8px; }
+  p.lead { color: #334155; font-size: 15.5px; margin: 6px 0 14px; }
+  .group-tag {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 999px;
+    margin-bottom: 6px;
+  }
+  .group-a { background: #eff6ff; color: var(--brand); border: 1px solid #bfdbfe; }
+  .group-b { background: #f0fdfa; color: #0f766e; border: 1px solid #99f6e4; }
+
+  /* Panels & charts */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 18px;
+    margin: 14px 0;
+  }
+  .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .chart { width: 100%; height: 340px; }
+
+  /* Callout */
+  .callout {
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin: 16px 0;
+    border: 1px solid var(--line);
+    background: #f8fafc;
+    border-left: 5px solid var(--brand-2);
+  }
+  .callout.key { border-left-color: var(--accent); background: #fffbeb; }
+  .callout.win { border-left-color: var(--good); background: var(--good-bg); }
+  .callout h4 { margin: 0 0 6px; font-size: 15px; font-weight: 800; }
+  .callout p { margin: 6px 0; font-size: 14.5px; color: #334155; }
+
+  /* Data tables */
+  table.data { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 4px; }
+  table.data caption { text-align: left; font-weight: 700; font-size: 13.5px; color: var(--ink); padding: 6px 0; }
+  table.data th, table.data td { border: 1px solid var(--line); padding: 6px 8px; text-align: right; }
+  table.data th { background: #f8fafc; color: #334155; font-weight: 700; }
+  table.data th:first-child, table.data td:first-child { text-align: left; }
+  table.data tbody tr:nth-child(even) { background: #fbfdff; }
+  table.data td.best { background: var(--good-bg); color: var(--good); font-weight: 800; }
+  table.data td.over { background: var(--bad-bg); color: var(--bad); font-weight: 700; }
+  .tbl-scroll { overflow-x: auto; }
+
+  /* Steps */
+  ol.steps { margin: 8px 0; padding-left: 22px; }
+  ol.steps li { margin: 8px 0; font-size: 14.5px; color: #334155; }
+
+  /* Footnotes */
+  .foot { margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+  .foot ul { margin: 6px 0; padding-left: 18px; }
+  .foot li { margin: 4px 0; }
+  sup.fn { color: var(--brand); font-weight: 700; }
+
+  .meta-line { font-size: 12.5px; color: var(--muted); margin-top: 26px; border-top: 1px solid var(--line); padding-top: 14px; }
+  @media (max-width: 860px) {
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .chart-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <h1>DeepSeek-V4-Flash DSpark on B300: Single-Instance TP8 vs PD 4P4D</h1>
+      <p class="sub">A concurrency-sweep latency and throughput study across two inference stacks and two GPU topologies on a single p6-b300.48xlarge (8&times; NVIDIA B300). The goal: understand where prefill/decode disaggregation (4P4D) helps TPOT and inter-token latency, and where it does not.</p>
+      <div class="badges">
+        <span class="badge">Hardware: 8&times; B300 (275 GB/card)</span>
+        <span class="badge">Workload: 40k input / 1.5k output</span>
+        <span class="badge">Concurrency: 1 / 2 / 4 / 8 / 16</span>
+        <span class="badge">Group A: vLLM nightly + NVFP4 DSpark</span>
+        <span class="badge">Group B: SGLang v0.5.17 + preview mxfp4 DSpark</span>
+        <span class="badge">Dates: 2026-09-13 / 2026-09-14</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <!-- KPI cards -->
+    <section class="kpi-grid">
+      <div class="kpi warn">
+        <div class="label">Group A verdict</div>
+        <div class="val">PD did not cut TPOT</div>
+        <div class="note">vLLM NVFP4: TPOT flat-to-worse; only c8 ITL p99 improved (224.70&rarr;153.29 ms).</div>
+      </div>
+      <div class="kpi good">
+        <div class="label">Group B verdict</div>
+        <div class="val">PD wins TPOT</div>
+        <div class="note">SGLang preview: PD TPOT median flat ~1.3 ms vs TP8 up to 15.02 ms at c16.</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Group B ITL p99 tail (c16)</div>
+        <div class="val">507.52 <small>&rarr; 8.48 ms</small></div>
+        <div class="note">TP8 tail collapses under PD (SGLang preview, c16).</div>
+      </div>
+      <div class="kpi warn">
+        <div class="label">PD TTFT cost (Group B, c16)</div>
+        <div class="val">~21.9 <small>vs ~4.2 s</small></div>
+        <div class="note">4 prefill cards + PD handoff raise prompt latency.</div>
+      </div>
+    </section>
+
+    <!-- Background / requirement -->
+    <h2 class="sec">Background &amp; objective</h2>
+    <p class="lead">
+      You asked us to characterize DeepSeek-V4-Flash with DSpark speculative decoding on B300 and to determine whether
+      prefill/decode disaggregation (a "4P4D" split: 4 GPUs prefill + 4 GPUs decode) improves time-per-output-token (TPOT)
+      and inter-token latency (ITL) relative to running the whole 8-card machine as a single tensor-parallel engine (TP8).
+      We measured this on two independent serving stacks, each on its own weight quantization, using the same benchmark
+      protocol: a fixed 40,000-token input, 1,500-token output, driven at concurrency 1, 2, 4, 8, and 16, over loopback,
+      with 0 failed requests at every level.
+    </p>
+    <div class="callout key">
+      <h4>The headline: the two stacks give opposite answers</h4>
+      <p><strong>Group A (vLLM, NVFP4 weights)</strong>: 4P4D did <strong>not</strong> lower TPOT. Median TPOT was flat-to-slightly-worse
+      and peak throughput dropped 15&ndash;30%. The one durable PD win was a calmer ITL p99 tail at c8 (224.70&rarr;153.29 ms).</p>
+      <p><strong>Group B (SGLang, preview mxfp4 weights)</strong>: 4P4D <strong>won decisively</strong> on TPOT and the ITL p99 tail.
+      PD TPOT median stayed flat at ~1.3 ms across all concurrency while TP8 climbed to 15.02 ms at c16; PD's ITL p99 never
+      exceeded ~11 ms while TP8's exploded to 507.52 ms at c16. The cost was much higher TTFT.</p>
+      <p><strong>Why opposite?</strong> DSpark speculative acceptance differed sharply between the two stacks. In the SGLang preview
+      run, DSpark accept length was <strong>5.47&ndash;5.76</strong> (strong acceptance), so dedicating 4 cards purely to decode kept
+      per-token latency extremely low and flat. In the vLLM NVFP4 run, accept length was only <strong>1.78&ndash;2.48</strong>, so
+      halving decode parallelism to 4 cards cost more than prefill isolation saved.</p>
+    </div>
+
+    <!-- ================= GROUP A ================= -->
+    <h2 class="sec">Group A &mdash; vLLM NVFP4 DSpark: TP8 vs PD 4P4D</h2>
+    <span class="group-tag group-a">vLLM nightly (0.29.1rc1.dev9) &middot; nvidia/DeepSeek-V4-Flash-nvfp4-DSpark (NVFP4) &middot; --kv-cache-dtype fp8</span>
+    <p class="lead">
+      Round 1 ran the whole machine as a single TP8 engine, direct to the engine. Round 2 split the same stack and the same
+      weights into a prefill instance (GPUs 0&ndash;3, TP4, kv_producer) and a decode instance (GPUs 4&ndash;7, TP4, kv_consumer)
+      over the NixlConnector, benched through the disagg proxy. DSpark stayed active on both sides. This group targeted lower TPOT.
+    </p>
+
+    <div class="panel">
+      <div class="chart-grid">
+        <div id="a_tpot" class="chart"></div>
+        <div id="a_itl" class="chart"></div>
+        <div id="a_ttft" class="chart"></div>
+        <div id="a_thru" class="chart"></div>
+      </div>
+      <div class="foot">
+        Charts plot the values reported in the two vLLM run summaries. TPOT/ITL/TTFT are median unless the series name says p99.
+        vLLM's default bench saved median + p99 only (no p90) for Group A.<sup class="fn">4</sup>
+      </div>
+    </div>
+
+    <div class="callout">
+      <h4>Group A insight</h4>
+      <p>Splitting to 4 decode cards removed prefill interference but halved decode parallelism. With DSpark acceptance only
+      1.78&ndash;2.48, the decode-parallelism loss dominated: TPOT median went 3.17&rarr;3.09 ms at c1 (marginal), then ticked up at
+      c2/c4/c8/c16 (e.g. c8 6.00&rarr;6.61, c16 8.71&rarr;8.99 ms). The single clear PD benefit was the c8 ITL p99 tail
+      (224.70&rarr;153.29 ms, ~32% lower), bought with a 15&ndash;30% peak-throughput sacrifice. For a pure-TPOT objective on this
+      stack, TP8 remains the better configuration.</p>
+    </div>
+
+    <div class="panel tbl-scroll">
+      <table class="data">
+        <caption>Group A raw data &mdash; vLLM NVFP4 DSpark, 40k in / 1.5k out (latency ms, throughput tok/s)<sup class="fn">4</sup></caption>
+        <thead>
+          <tr>
+            <th>conc</th><th>reqs</th><th>dur (s)</th><th>out tok/s</th><th>total tok/s</th>
+            <th>TTFT med</th><th>TTFT p99</th><th>TPOT med</th><th>TPOT p99</th><th>ITL med</th><th>ITL p99</th><th>accept len</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>TP8 &middot; 1</td><td>8</td><td>54.99</td><td class="best">218.24</td><td class="best">6049.97</td><td class="best">747.70</td><td>2259.72</td><td>3.17</td><td>6.89</td><td class="best">7.04</td><td>13.98</td><td>1.78</td></tr>
+          <tr><td>TP8 &middot; 2</td><td>8</td><td>23.54</td><td class="best">509.66</td><td class="best">14128.86</td><td class="best">191.89</td><td>2398.15</td><td class="best">3.39</td><td class="best">3.72</td><td class="best">7.52</td><td class="best">14.08</td><td>2.30</td></tr>
+          <tr><td>TP8 &middot; 4</td><td>12</td><td>22.16</td><td class="best">812.19</td><td class="best">22515.60</td><td>394.16</td><td class="best">812.32</td><td class="best">4.27</td><td>6.08</td><td class="best">8.64</td><td class="best">17.40</td><td>2.25</td></tr>
+          <tr><td>TP8 &middot; 8</td><td>24</td><td>33.81</td><td class="best">1064.67</td><td class="best">29514.91</td><td class="best">786.90</td><td>3203.82</td><td class="best">6.00</td><td class="best">8.74</td><td class="best">9.99</td><td class="over">224.70</td><td>2.48</td></tr>
+          <tr><td>TP8 &middot; 16</td><td>48</td><td>49.36</td><td class="best">1458.79</td><td class="best">40440.61</td><td class="best">769.22</td><td class="best">3937.24</td><td class="best">8.71</td><td class="best">19.85</td><td class="best">11.24</td><td class="over">240.12</td><td>2.01</td></tr>
+          <tr><td>PD &middot; 1</td><td>8</td><td>55.11</td><td>217.74</td><td>6036.18</td><td>1652.61</td><td>5913.00</td><td class="best">3.09</td><td class="best">3.67</td><td>7.50</td><td class="best">11.28</td><td>&mdash;</td></tr>
+          <tr><td>PD &middot; 2</td><td>8</td><td>30.02</td><td>399.74</td><td>11081.69</td><td>390.33</td><td>4843.08</td><td>3.41</td><td>7.84</td><td>8.20</td><td>14.88</td><td>&mdash;</td></tr>
+          <tr><td>PD &middot; 4</td><td>12</td><td>31.69</td><td>567.92</td><td>15744.01</td><td>4074.17</td><td>6960.70</td><td>4.66</td><td class="best">5.50</td><td>9.52</td><td>16.11</td><td>&mdash;</td></tr>
+          <tr><td>PD &middot; 8</td><td>24</td><td>40.86</td><td>881.15</td><td>24427.22</td><td>1607.07</td><td class="best">4447.76</td><td>6.61</td><td>13.78</td><td>11.29</td><td class="best">153.29</td><td>&mdash;</td></tr>
+          <tr><td>PD &middot; 16</td><td>48</td><td>58.22</td><td>1236.75</td><td>34285.10</td><td>1652.70</td><td>5675.70</td><td>8.99</td><td>23.22</td><td>13.15</td><td class="over">256.82</td><td>&mdash;</td></tr>
+        </tbody>
+      </table>
+      <div class="foot">
+        <code>.best</code> highlights the winning cell between TP8 and PD at each concurrency (lower is better for latency,
+        higher for throughput). <code>.over</code> flags ITL p99 tail blow-ups (&ge;150 ms). Accept length is only observable
+        on the direct-to-engine TP8 run; the PD proxy does not surface DSpark stats.<sup class="fn">3</sup>
+      </div>
+    </div>
+
+    <!-- ================= GROUP B ================= -->
+    <h2 class="sec">Group B &mdash; SGLang preview DSpark (mxfp4): TP8 vs PD 4P4D</h2>
+    <span class="group-tag group-b">SGLang v0.5.17-cu130 &middot; preview deepseek-ai/DeepSeek-V4-Flash-DSpark (mxfp4) &middot; flashinfer_mxfp4 MoE</span>
+    <p class="lead">
+      Rounds 3 and 4 ran the preview DSpark weights on the same 8&times; B300, first as a whole-machine TP8 engine, then as an
+      SGLang-native 4P4D split (prefill TP4 GPUs 0&ndash;3 + decode TP4 GPUs 4&ndash;7, nixl transfer backend, DSpark on the decode
+      side, benched through the SGLang PD router). Same 40k/1.5k protocol.
+    </p>
+
+    <div class="panel">
+      <div class="chart-grid">
+        <div id="b_tpot" class="chart"></div>
+        <div id="b_itl" class="chart"></div>
+        <div id="b_ttft" class="chart"></div>
+        <div id="b_thru" class="chart"></div>
+      </div>
+      <div class="foot">
+        SGLang bench captured median, p90, and p99. The PD ITL median (~7.1 ms flat) is a per-DSpark-step interval through the
+        router, not a per-token gap; PD's true per-token cadence equals its TPOT (~1.3 ms).<sup class="fn">3</sup>
+      </div>
+    </div>
+
+    <div class="callout win">
+      <h4>Group B insight</h4>
+      <p>Dedicating 4 cards purely to decode kept PD TPOT median flat at ~1.3 ms across all concurrency (1.22&rarr;1.32 ms from c1
+      to c16), with TPOT p99 &le;2.12 ms everywhere. TP8's TPOT rose steeply to 15.02 ms median (37.13 ms p99) at c16, and its
+      ITL p99 tail blew out to 507.52 ms at c16 from prefill/decode contention on the shared cards. PD held ITL p99 &le;10.96 ms
+      at every level. This is the reverse of Group A, driven by DSpark accept length 5.47&ndash;5.76 (strong acceptance): with ~5.5
+      tokens accepted per decode step, 4 decode cards were ample and prefill isolation was pure upside for TPOT. The cost is
+      TTFT: PD c16 median ~21.9 s vs TP8 ~4.2 s, because prefill has only 4 cards plus the PD handoff.</p>
+    </div>
+
+    <div class="panel tbl-scroll">
+      <table class="data">
+        <caption>Group B (a) &mdash; SGLang preview DSpark whole-machine TP8, 40k in / 1.5k out (latency ms, throughput tok/s)</caption>
+        <thead>
+          <tr>
+            <th>conc</th><th>reqs</th><th>out tok/s</th><th>total tok/s</th>
+            <th>TTFT med</th><th>TTFT p90</th><th>TTFT p99</th>
+            <th>TPOT med</th><th>TPOT p90</th><th>TPOT p99</th>
+            <th>ITL med</th><th>ITL p90</th><th>ITL p99</th><th>accept len</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>8/8</td><td>356.5</td><td>9864</td><td>1711.26</td><td>3922</td><td>3945.79</td><td>1.20</td><td>1.37</td><td>1.43</td><td>1.19</td><td>1.42</td><td>2.36</td><td>5.74</td></tr>
+          <tr><td>2</td><td>8/8</td><td>573.3</td><td>15860</td><td>1692</td><td>2022</td><td>2622</td><td>2.36</td><td>3.01</td><td>4.05</td><td>1.29</td><td>1.55</td><td>2.60</td><td>5.76</td></tr>
+          <tr><td>4</td><td>12/12</td><td>511.8</td><td>14159</td><td>2932</td><td>6918</td><td>8016</td><td>5.38</td><td>8.72</td><td>11.33</td><td>1.44</td><td>1.73</td><td>17.35</td><td>5.64</td></tr>
+          <tr><td>8</td><td>24/24</td><td>780.0</td><td>21581</td><td>3267</td><td>9074</td><td>11381</td><td>7.17</td><td>10.51</td><td>15.72</td><td>1.67</td><td>2.02</td><td>66.02</td><td>5.63</td></tr>
+          <tr><td>16</td><td>48/48</td><td>763.3</td><td>21119</td><td>4206.86</td><td>16741</td><td>23490.85</td><td>15.02</td><td>24.54</td><td>37.13</td><td>1.96</td><td>2.93</td><td class="over">507.52</td><td>5.47</td></tr>
+        </tbody>
+      </table>
+      <div class="foot">TP8 <code>out tok/s</code> is non-monotonic (356.5&rarr;573.3&rarr;511.8&rarr;780.0&rarr;763.3), dipping at c4 and c16: real measured prefill/decode contention on the shared cards, not a transcription error.</div>
+    </div>
+
+    <div class="panel tbl-scroll">
+      <table class="data">
+        <caption>Group B (b) &mdash; SGLang preview DSpark PD 4P4D via router, 40k in / 1.5k out (latency ms, throughput tok/s)</caption>
+        <thead>
+          <tr>
+            <th>conc</th><th>reqs</th><th>out tok/s</th><th>total tok/s</th>
+            <th>TTFT med</th><th>TTFT p90</th><th>TTFT p99</th>
+            <th>TPOT med</th><th>TPOT p90</th><th>TPOT p99</th>
+            <th>ITL med</th><th>ITL p90</th><th>ITL p99</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>8/8</td><td>362.8</td><td>10036</td><td>1834.43</td><td>4000</td><td>4002.77</td><td>1.22</td><td>1.40</td><td>1.47</td><td>7.07</td><td>7.12</td><td>7.20</td></tr>
+          <tr><td>2</td><td>8/8</td><td>523.9</td><td>14493</td><td>2852</td><td>4923</td><td>5408</td><td>1.26</td><td>1.94</td><td>2.12</td><td>7.10</td><td>7.72</td><td>7.85</td></tr>
+          <tr><td>4</td><td>12/12</td><td>814.5</td><td>22535</td><td>3780</td><td>5781</td><td>6362</td><td>1.33</td><td>1.65</td><td>1.84</td><td>7.13</td><td>8.27</td><td>10.96</td></tr>
+          <tr><td>8</td><td>24/24</td><td>880.3</td><td>24355</td><td>9614</td><td>11653</td><td>12395</td><td>1.32</td><td>1.42</td><td>1.52</td><td>7.12</td><td>7.76</td><td>8.67</td></tr>
+          <tr><td>16</td><td>48/48</td><td>917.7</td><td>25390</td><td class="over">21929.31</td><td>23131</td><td>24780.18</td><td>1.32</td><td>1.45</td><td>1.56</td><td>7.12</td><td>7.75</td><td>8.48</td></tr>
+        </tbody>
+      </table>
+      <div class="foot"><code>.over</code> flags the c16 TTFT median (~21.9 s), the headline cost of the PD topology. DSpark accept length is not surfaced through the PD router, so the accept column is omitted for PD.<sup class="fn">3</sup></div>
+    </div>
+
+    <div class="panel tbl-scroll">
+      <table class="data">
+        <caption>Group B (c) &mdash; TP8 &rarr; PD side-by-side (<code>.best</code> = winning cell)</caption>
+        <thead>
+          <tr><th>conc</th><th>out tok/s TP8&rarr;PD</th><th>TPOT med TP8&rarr;PD</th><th>TPOT p99 TP8&rarr;PD</th><th>ITL med TP8&rarr;PD</th><th>ITL p99 TP8&rarr;PD</th><th>TTFT med TP8&rarr;PD</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>356.5 &rarr; <span>362.8</span></td><td><b>1.20</b> &rarr; 1.22</td><td><b>1.43</b> &rarr; 1.47</td><td><b>1.19</b> &rarr; 7.07</td><td><b>2.36</b> &rarr; 7.20</td><td><b>1711</b> &rarr; 1834</td></tr>
+          <tr><td>2</td><td><b>573.3</b> &rarr; 523.9</td><td>2.36 &rarr; <b>1.26</b></td><td>4.05 &rarr; <b>2.12</b></td><td><b>1.29</b> &rarr; 7.10</td><td><b>2.60</b> &rarr; 7.85</td><td><b>1692</b> &rarr; 2852</td></tr>
+          <tr><td>4</td><td>511.8 &rarr; <b>814.5</b></td><td>5.38 &rarr; <b>1.33</b></td><td>11.33 &rarr; <b>1.84</b></td><td><b>1.44</b> &rarr; 7.13</td><td>17.35 &rarr; <b>10.96</b></td><td><b>2932</b> &rarr; 3780</td></tr>
+          <tr><td>8</td><td>780.0 &rarr; <b>880.3</b></td><td>7.17 &rarr; <b>1.32</b></td><td>15.72 &rarr; <b>1.52</b></td><td><b>1.67</b> &rarr; 7.12</td><td>66.02 &rarr; <b>8.67</b></td><td><b>3267</b> &rarr; 9614</td></tr>
+          <tr><td>16</td><td>763.3 &rarr; <b>917.7</b></td><td>15.02 &rarr; <b>1.32</b></td><td>37.13 &rarr; <b>1.56</b></td><td><b>1.96</b> &rarr; 7.12</td><td class="over">507.52 &rarr; <b>8.48</b></td><td><b>4206</b> &rarr; 21929</td></tr>
+        </tbody>
+      </table>
+      <div class="foot">ITL median favors TP8 on paper, but the two columns are not measured the same way (see footnote 3): PD's ~7.1 ms is a per-decode-step interval; its real per-token cadence (~1.3 ms TPOT) is comparable to TP8.</div>
+    </div>
+
+    <!-- Cross-group insight -->
+    <h2 class="sec">Core insight: why the two groups disagree</h2>
+    <div class="callout key">
+      <h4>DSpark acceptance is the hinge</h4>
+      <p>The single variable that flips the verdict is speculative-decode acceptance. In Group B (SGLang preview mxfp4),
+      DSpark accepted <strong>5.47&ndash;5.76 tokens per step</strong> &mdash; each decode step emits ~5.5 tokens, so 4 dedicated decode
+      cards produce very low, flat per-token latency and prefill isolation is pure upside. In Group A (vLLM NVFP4), DSpark
+      accepted only <strong>1.78&ndash;2.48 tokens per step</strong>, so decode is far more compute-bound; cutting decode from 8 to 4
+      cards loses parallelism that outweighs the prefill-isolation benefit, and TPOT does not improve.</p>
+      <p>Practically: <strong>PD 4P4D is a TPOT/tail-latency win only when speculative acceptance is high enough that 4 decode cards
+      keep up.</strong> Under weak acceptance, the whole-machine TP8 engine is the better TPOT choice. Because Group A and Group B
+      also differ in inference engine and weight quantization, they are two independent comparisons and must not be treated as a
+      single like-for-like 4-way plot.<sup class="fn">2</sup></p>
+    </div>
+
+    <!-- Recommendations -->
+    <h2 class="sec">AWS-recommended next steps</h2>
+    <ol class="steps">
+      <li><strong>Choose topology by target concurrency and latency objective.</strong> If your production SLO is low, stable TPOT and
+      a controlled inter-token tail, and you are on the SGLang preview DSpark stack, PD 4P4D is the clear pick: it held TPOT median
+      at ~1.3 ms and ITL p99 &le;10.96 ms all the way to c16, versus TP8's 15.02 ms TPOT and 507.52 ms ITL p99 at c16. If prompt
+      responsiveness (TTFT) dominates, or you are on the vLLM NVFP4 stack, prefer whole-machine TP8.</li>
+      <li><strong>Treat PD disaggregation as a TPOT lever for speculative-decode-heavy workloads.</strong> The preview DSpark stack's
+      strong acceptance (5.47&ndash;5.76) is exactly the regime where separating decode onto dedicated cards pays off. For TPOT-sensitive
+      products on that stack, PD 4P4D is worth the higher TTFT and the ~4-card prefill limit.</li>
+      <li><strong>Mind the TTFT trade in PD.</strong> The PD topology raised Group B c16 TTFT median to ~21.9 s vs ~4.2 s on TP8. For
+      interactive prompt-heavy use, either cap concurrency, add prefill capacity, or keep TP8 where first-token latency is the KPI.</li>
+      <li><strong>Validate DSpark acceptance directly on the PD path before committing production capacity.</strong> Accept length was
+      only observable on the direct-to-engine TP8 runs (5.47&ndash;5.76 for SGLang preview, 1.78&ndash;2.48 for vLLM NVFP4); it is not
+      surfaced through either the vLLM disagg proxy or the SGLang PD router.<sup class="fn">3</sup> We recommend instrumenting the decode
+      engine to confirm realized acceptance under production traffic, since the TPOT verdict hinges on it.</li>
+      <li><strong>Re-benchmark with your production prompt mix and output lengths.</strong> These runs used a fixed 40k input / 1.5k
+      output at concurrency 1&ndash;16. Shorter prompts, longer generations, or bursty concurrency will shift the prefill/decode balance
+      and therefore the TP8-vs-PD crossover point. A short confirmation sweep on representative traffic is the safest way to lock in a topology.</li>
+    </ol>
+
+    <!-- Footnotes -->
+    <div class="foot">
+      <h3 class="sub2">Comparability caveats (read before comparing cells)</h3>
+      <ul>
+        <li><sup class="fn">1</sup> Concurrency levels are <strong>1 / 2 / 4 / 8 / 16</strong> for every run in this report. No other concurrency schedule applies.</li>
+        <li><sup class="fn">2</sup> Group A (vLLM) and Group B (SGLang) use <strong>different inference engines and different weight quantizations</strong> (NVFP4 vs preview mxfp4). They are two independent TP8-vs-PD comparisons; do not compare across groups as if they were the same measurement.</li>
+        <li><sup class="fn">3</sup> For both PD runs, the reported <strong>ITL median is a per-DSpark-step interval</strong> (the router/proxy streams one chunk per decode step of ~5.5 tokens), not a per-token gap. PD's true per-token cadence &asymp; its TPOT (~1.3 ms for SGLang preview). DSpark acceptance statistics are <strong>not observable through the PD router / disagg proxy</strong>, only on the direct-to-engine TP8 runs.</li>
+        <li><sup class="fn">4</sup> Group A (vLLM) bench saved <strong>median + p99 only</strong> (no p90). Group B (SGLang) bench captured median, p90, and p99.</li>
+      </ul>
+    </div>
+
+    <div class="meta-line">
+      Data sources (all in this repository): <code>docs/run-summaries/b300-vllm-nvfp4-dspark-20260913-summary.md</code>,
+      <code>docs/run-summaries/b300-vllm-pd-4p4d-20260913-summary.md</code>,
+      <code>docs/run-summaries/b300-sglang-preview-dspark-tp8-vs-4p4d-20260914-summary.md</code>.
+      All performance figures are measured values transcribed from those summaries. Recommendations are advisory and introduce no untested numbers.
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/highcharts@12.1.2/highcharts.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highcharts@12.1.2/modules/accessibility.js"></script>
+  <script>
+    var CONC = [1, 2, 4, 8, 16];
+
+    // ---- Group A: vLLM NVFP4 DSpark (round 1 TP8, round 2 PD 4P4D) ----
+    var A = {
+      tp8: {
+        tpot_med: [3.17, 3.39, 4.27, 6.00, 8.71],
+        itl_p99:  [13.98, 14.08, 17.40, 224.70, 240.12],
+        ttft_med: [747.70, 191.89, 394.16, 786.90, 769.22],
+        out:      [218.24, 509.66, 812.19, 1064.67, 1458.79]
+      },
+      pd: {
+        tpot_med: [3.09, 3.41, 4.66, 6.61, 8.99],
+        itl_p99:  [11.28, 14.88, 16.11, 153.29, 256.82],
+        ttft_med: [1652.61, 390.33, 4074.17, 1607.07, 1652.70],
+        out:      [217.74, 399.74, 567.92, 881.15, 1236.75]
+      }
+    };
+
+    // ---- Group B: SGLang preview mxfp4 (round 3 TP8, round 4 PD 4P4D) ----
+    var B = {
+      tp8: {
+        tpot_med: [1.20, 2.36, 5.38, 7.17, 15.02],
+        itl_p99:  [2.36, 2.60, 17.35, 66.02, 507.52],
+        ttft_med: [1711.26, 1692, 2932, 3267, 4206.86],
+        out:      [356.5, 573.3, 511.8, 780.0, 763.3]
+      },
+      pd: {
+        tpot_med: [1.22, 1.26, 1.33, 1.32, 1.32],
+        itl_p99:  [7.20, 7.85, 10.96, 8.67, 8.48],
+        ttft_med: [1834.43, 2852, 3780, 9614, 21929.31],
+        out:      [362.8, 523.9, 814.5, 880.3, 917.7]
+      }
+    };
+
+    var COL_TP8 = '#1d4ed8', COL_PD = '#0ea5e9';
+
+    function lineChart(elId, title, ytitle, tp8Data, pdData, opts) {
+      opts = opts || {};
+      Highcharts.chart(elId, {
+        chart: { type: 'line', backgroundColor: 'transparent', height: 340 },
+        title: { text: title, style: { fontSize: '15px', fontWeight: '700', color: '#0f172a' } },
+        credits: { enabled: false },
+        xAxis: { categories: CONC.map(String), title: { text: 'Concurrency' }, gridLineWidth: 1, gridLineColor: '#eef2f7' },
+        yAxis: { title: { text: ytitle }, type: opts.log ? 'logarithmic' : 'linear', gridLineColor: '#eef2f7' },
+        tooltip: { shared: true, valueSuffix: opts.suffix || '' },
+        legend: { itemStyle: { fontWeight: '600' } },
+        plotOptions: { line: { marker: { enabled: true, radius: 4 }, lineWidth: 2.5 } },
+        series: [
+          { name: 'TP8', data: tp8Data, color: COL_TP8 },
+          { name: 'PD 4P4D', data: pdData, color: COL_PD }
+        ]
+      });
+    }
+
+    // Group A charts
+    lineChart('a_tpot', 'Group A: TPOT median vs concurrency', 'TPOT median (ms)', A.tp8.tpot_med, A.pd.tpot_med, { suffix: ' ms' });
+    lineChart('a_itl',  'Group A: ITL p99 vs concurrency', 'ITL p99 (ms)', A.tp8.itl_p99, A.pd.itl_p99, { suffix: ' ms', log: true });
+    lineChart('a_ttft', 'Group A: TTFT median vs concurrency', 'TTFT median (ms)', A.tp8.ttft_med, A.pd.ttft_med, { suffix: ' ms' });
+    lineChart('a_thru', 'Group A: output throughput vs concurrency', 'Output tok/s', A.tp8.out, A.pd.out, { suffix: ' tok/s' });
+
+    // Group B charts
+    lineChart('b_tpot', 'Group B: TPOT median vs concurrency', 'TPOT median (ms)', B.tp8.tpot_med, B.pd.tpot_med, { suffix: ' ms' });
+    lineChart('b_itl',  'Group B: ITL p99 vs concurrency', 'ITL p99 (ms)', B.tp8.itl_p99, B.pd.itl_p99, { suffix: ' ms', log: true });
+    lineChart('b_ttft', 'Group B: TTFT median vs concurrency', 'TTFT median (ms)', B.tp8.ttft_med, B.pd.ttft_med, { suffix: ' ms' });
+    lineChart('b_thru', 'Group B: output throughput vs concurrency', 'Output tok/s', B.tp8.out, B.pd.out, { suffix: ' tok/s' });
+  </script>
+</body>
+</html>
