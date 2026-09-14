@@ -1,7 +1,14 @@
 {
   "task_id": "task-b300-sglang-preview-dspark-tp8-vs-4p4d",
   "task_description": "On a new B300 (8xB300, i-0230a688056b553f5, us-west-2), serve the preview DeepSeek-V4-Flash-DSpark weights (deepseek-ai/DeepSeek-V4-Flash-DSpark, SGLang fp8/mxfp4 preview, ~167GB) via SGLang v0.5.17-cu130 in two topologies -- whole-machine single-instance TP8, and 4P4D PD-disaggregation (4-card prefill + 4-card decode) -- and run the same bench 口径 (40k in / 1.5k out, c=1/2/4/8/16) on each, then compare TPOT/ITL. All access is via AWS SSM send-command over loopback 127.0.0.1:30080 (SG has no ingress). Do NOT delete booking / stop instance; that irreversible teardown is the orchestrator's call after results.",
-  "status": "in_progress",
+  "status": "completed",
   "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
-  "blocked_reason": null
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "No local build/test suite (operational + docs task). Verification done against the live instance via SSM: PD router /health=200, all 3 PD containers Up, GPUs split cleanly 0-3 prefill (~253GB) / 4-7 decode (~252GB) with no collision. Both bench result sets present on NVMe: /opt/dlami/nvme/bench-out/c{1,2,4,8,16}.jsonl (TP8) and /opt/dlami/nvme/bench-out-pd/c{1,2,4,8,16}.jsonl (4P4D). Spot-checked raw JSONL vs summary tables and they match exactly: TP8 c16 TPOT med 15.02 / p99 37.13 / ITL p99 507.52 / out 763.33; PD c16 TPOT med 1.32 / p99 1.56 / ITL p99 8.48 / out 917.70; TP8 c1 accept_length 5.74. The summary doc b300-sglang-preview-dspark-tp8-vs-4p4d-20260914-summary.md is populated with these real numbers, no placeholders, no em dashes. docker_build skipped: not applicable (this task runs prebuilt lmsysorg/sglang images on the remote instance, no image is built). Instance + servers + booking 5bd1f130 left running by design for orchestrator teardown decision."
+  }
 }

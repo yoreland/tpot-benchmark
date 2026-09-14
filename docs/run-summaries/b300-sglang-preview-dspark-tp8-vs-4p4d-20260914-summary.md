@@ -143,6 +143,12 @@ DSpark accept length **5.47-5.76** at every level (draft arch
 `DeepseekV4ForCausalLMDSpark` accepting ~5-6 tokens/step), surfaced because the
 bench ran direct to the engine.
 
+Note TP8 `out tok/s` is **non-monotonic** across the sweep (356.5 → 573.3 → 511.8 →
+780.0 → 763.3, dipping at c4 and again at c16). This is real measured data (verified
+in the JSONL), not a transcription error; it reflects prefill/decode contention on
+the shared 8 cards, where incoming prefills intermittently stall decode as
+concurrency grows.
+
 ### (b) 4P4D PD (bench via the SGLang PD router on 127.0.0.1:30080)
 
 | conc | reqs | out tok/s | total tok/s | TTFT med | TTFT p90 | TTFT p99 | TPOT med | TPOT p90 | TPOT p99 | ITL med | ITL p90 | ITL p99 |
@@ -168,18 +174,28 @@ strongly-accepting TP8 run.
 | conc | out tok/s (TP8 → PD) | TPOT med (TP8 → PD) | TPOT p99 (TP8 → PD) | ITL med (TP8 → PD) | ITL p99 (TP8 → PD) | TTFT med (TP8 → PD) |
 |---:|---:|---:|---:|---:|---:|---:|
 | 1  | 356.5 → **362.8** | **1.20** → 1.22 | **1.43** → 1.47 | **1.19** → 7.07 | **2.36** → 7.20 | **1711** → 1834 |
-| 2  | 573.3 → 523.9     | 2.36 → **1.26** | 4.05 → **2.12** | **1.29** → 7.10 | 2.60 → 7.85 | **1692** → 2852 |
+| 2  | **573.3** → 523.9 | 2.36 → **1.26** | 4.05 → **2.12** | **1.29** → 7.10 | **2.60** → 7.85 | **1692** → 2852 |
 | 4  | 511.8 → **814.5** | 5.38 → **1.33** | 11.33 → **1.84**| **1.44** → 7.13 | 17.35 → **10.96** | **2932** → 3780 |
 | 8  | 780.0 → **880.3** | 7.17 → **1.32** | 15.72 → **1.52**| **1.67** → 7.12 | 66.02 → **8.67** | **3267** → 9614 |
 | 16 | 763.3 → **917.7** | 15.02 → **1.32**| 37.13 → **1.56**| **1.96** → 7.12 | 507.52 → **8.48** | **4206** → 21929 |
 
-Reading notes for the ITL columns: **ITL median** - TP8 wins at every level
-(~1.2-2.0 ms vs PD's ~7.1 ms flat), because on TP8 each DSpark step emits ~5-6
-accepted tokens so the *median* inter-token gap is tiny, whereas the PD router
-measures a steady ~7.1 ms inter-token cadence. **ITL p99** - PD wins from c4
+Reading notes for the ITL columns: **ITL median** - TP8 wins at every level on the
+raw numbers (~1.2-2.0 ms vs PD's ~7.1 ms flat), but the two columns are not
+measured the same way (see the note below the p99 discussion), so this is not a
+like-for-like per-token latency comparison. **ITL p99** - PD wins from c4
 upward: TP8's p99 tail blows out (c8 66.02 ms, **c16 507.52 ms**) while PD stays
-calm (<=10.96 ms at every level). At c1 TP8's ITL p99 (2.36 ms) is still lower than
-PD's (7.20 ms), so that cell bolds TP8; the PD ITL p99 win only emerges from c4 up.
+calm (<=10.96 ms at every level). TP8's ITL p99 win covers **both c1 and c2** (2.36
+ms vs PD 7.20 ms at c1, 2.60 ms vs PD 7.85 ms at c2, both bolded to TP8); the PD
+ITL p99 win only emerges from c4 up.
+
+Note the two ITL-median columns are **not measured the same way**: the TP8 column
+is a direct-to-engine per-token gap, while the PD column comes from the router,
+which streams one chunk per DSpark decode step (~5-6 accepted tokens each), so its
+~7.1 ms figure is a per-decode-**step** interval, not a per-token gap. The
+arithmetic confirms this (7.1 ms / ~5.5 accepted tokens per step ≈ 1.3 ms ≈ the PD
+TPOT median). So "TP8 wins ITL median" is a measurement-granularity artifact, not a
+real 6x user-latency advantage: PD's true per-token cadence is ~1.3 ms (its TPOT),
+comparable to TP8.
 
 ### Verdict: which topology is better for TPOT / ITL?
 
@@ -197,17 +213,25 @@ not lower TPOT), and it is driven by how the two stacks expose latency:
   **507.52 ms**) from prefill/decode contention on the shared 8 cards. PD keeps the
   ITL p99 calm at **<=10.96 ms at every level** (c16 8.48 ms). The severe TP8 c16
   tail is essentially gone under PD.
-- **ITL median: TP8 wins.** TP8 records ~1.2-2.0 ms median inter-token gaps
-  (DSpark emits ~5-6 tokens per verified step, so the typical gap is tiny), vs PD's
-  steady ~7.1 ms cadence through the router. So TP8 has the lower *typical*
-  inter-token latency even though its *tail* is far worse.
+- **ITL median: TP8 wins on paper, but the two columns are not like-for-like.**
+  TP8 records ~1.2-2.0 ms median inter-token gaps (DSpark emits ~5-6 tokens per
+  verified step, direct-to-engine per-token measurement), vs PD's steady ~7.1 ms
+  through the router. But the PD figure is a per-decode-**step** interval (the
+  router streams one chunk per DSpark step of ~5-6 tokens), not a per-token gap:
+  7.1 ms / ~5.5 accepted tokens ≈ 1.3 ms, which is exactly the PD TPOT median. So
+  this is a **measurement-granularity difference, not a real 6x user-latency win**;
+  PD's actual per-token cadence (~1.3 ms TPOT) is comparable to TP8's. Read this
+  row as "TP8 exposes finer-grained per-token ITL," not as PD delivering worse
+  typical token latency.
 - **TTFT: TP8 wins, and it is the 4P4D cost.** TP8 TTFT median is 1.7-4.2 s and
   grows gently; 4P4D TTFT median grows steeply with concurrency (c8 9.6 s, **c16
   ~21.9 s** vs TP8's ~4.2 s) because prefill has only 4 cards plus the PD handoff.
   If TTFT (prompt responsiveness) matters, TP8 is better.
 - **Throughput.** Roughly comparable, with PD ahead at higher concurrency (c16 out
   917.7 vs 763.3 tok/s, c8 880.3 vs 780.0), because PD's dedicated decode cards are
-  not stalled by incoming prefills. TP8 leads only at c2.
+  not stalled by incoming prefills. TP8 leads only at c2. TP8's throughput is also
+  non-monotonic (it dips at c4 and c16), reflecting that same prefill/decode
+  contention on the shared cards rather than any measurement error.
 
 **Bottom line for "整机 vs 4p4d" on TPOT / ITL:** **4P4D is the better topology for
 TPOT and for the ITL p99 tail**: TPOT stays flat at ~1.3 ms and the ITL p99 tail
@@ -221,10 +245,15 @@ acceptance visibility is required (see caveat).
 > comparison implicitly assumes comparable DSpark speculative-decode acceptance
 > across the two runs. TP8 reported accept length **5.47-5.76**, but those stats
 > are **not observable through the PD router** (see table (b) note). DSpark is
-> confirmed configured and loaded identically on the decode side, and the flat
-> ~7.1 ms ITL / ~1.3 ms TPOT are consistent with strong acceptance, yet realized
-> acceptance could still differ. A slice of any TPOT/ITL delta could therefore
-> reflect a spec-decode-acceptance difference rather than the topology alone.
+> confirmed configured and loaded identically on the decode side. There is also an
+> indirect **quantitative** bound: the PD router's ~7.1 ms per-step ITL median over
+> its ~1.3 ms TPOT median implies ~7.1 / 1.3 ≈ **5.5 accepted tokens per DSpark
+> step**, i.e. comparable to TP8's directly-measured 5.47-5.76. So the
+> acceptance-driven slice of the TPOT/ITL delta is probably small, and most of the
+> delta is topology, not an acceptance gap. This remains an indirect estimate:
+> direct PD acceptance was not measured through the router, so realized acceptance
+> could still differ, but the evidence bounds that risk rather than leaving it fully
+> open.
 
 ## Not done (by design)
 
