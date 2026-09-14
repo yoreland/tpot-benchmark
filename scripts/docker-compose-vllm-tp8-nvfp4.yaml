@@ -1,0 +1,62 @@
+# docker-compose-vllm-tp8-nvfp4.yaml
+# Round 1: vLLM whole-machine TP8, NVFP4 DSpark ("选 B").
+# Target: B300 8-GPU (p6-b300.48xlarge), nvidia/DeepSeek-V4-Flash-nvfp4-DSpark.
+# Serves directly on 127.0.0.1:30080.
+#
+# Verbatim transcription of the verified `docker run` from
+#   docs/run-summaries/b300-vllm-nvfp4-dspark-20260913-summary.md
+# (vLLM 0.29.1rc1.dev9+g2671fedfc, image vllm/vllm-openai:nightly). This route
+# had never succeeded before and succeeded on 2026-09-13 on i-07a1fb189f180ff3e.
+#
+# Key parameters (all from the summary, none invented):
+#   - image vllm/vllm-openai:nightly, served-model-name dsv4-nvfp4-dspark
+#   - --tensor-parallel-size 8 --enable-expert-parallel (NVFP4 MoE, TRT-LLM fused MoE)
+#   - --kv-cache-dtype fp8 (REQUIRED for DeepSeek-V4 fp8_ds_mla; block size 256,
+#     DEEPSEEK_SPARSE_SWA backend)
+#   - --max-model-len 133120, --gpu-memory-utilization 0.90
+#   - DSpark speculative decoding via --speculative-config
+#     {"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"greedy"}
+#   - env VLLM_USE_V1=1, HF_HUB_OFFLINE=1
+#
+# Known caveat (see scripts/README-b300-launch-configs.md): the bench client for
+# this vLLM nightly needs --random-range-ratio 0.0 (min==max==input_len). The
+# nightly REJECTS 1.0. This is the OPPOSITE of SGLang, where 1.0 means fixed.
+#
+# Usage:
+#   docker compose -f docker-compose-vllm-tp8-nvfp4.yaml up -d
+#   # startup ~18 min one-time (weight load -> DeepGEMM/CUDA compile ->
+#   # FlashInfer autotune -> API server bind), then bench http://127.0.0.1:30080
+
+volumes:
+  hfcache:
+
+services:
+  vllm-tp8:
+    image: vllm/vllm-openai:nightly
+    runtime: nvidia
+    network_mode: host
+    ipc: host
+    shm_size: 32g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - hfcache:/root/.cache/huggingface
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+      HF_HUB_OFFLINE: "1"
+      VLLM_USE_V1: "1"
+    restart: "no"
+    command: >
+      --model /opt/dlami/nvme/models/nvidia__DeepSeek-V4-Flash-nvfp4-DSpark
+      --served-model-name dsv4-nvfp4-dspark
+      --tensor-parallel-size 8 --enable-expert-parallel
+      --trust-remote-code --kv-cache-dtype fp8
+      --gpu-memory-utilization 0.90 --max-model-len 133120
+      --reasoning-parser deepseek_v4 --tool-call-parser deepseek_v4 --enable-auto-tool-choice
+      --speculative-config '{"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"greedy"}'
+      --host 0.0.0.0 --port 30080
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s

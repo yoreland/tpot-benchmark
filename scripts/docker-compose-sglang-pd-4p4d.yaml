@@ -1,0 +1,137 @@
+# docker-compose-sglang-pd-4p4d.yaml
+# Round 4: SGLang preview PD-disaggregated 4P4D (native PD + nixl, DSpark on decode).
+# Target: B300 8-GPU (p6-b300.48xlarge), preview deepseek-ai/DeepSeek-V4-Flash-DSpark.
+#   - prefill engine: GPUs 0-3, TP4, --disaggregation-mode prefill,
+#     bootstrap port 9000, engine port 30000 (NO spec-decode on prefill)
+#   - decode  engine: GPUs 4-7, TP4, --disaggregation-mode decode,
+#     bootstrap port 9300, engine port 30300, DSpark on
+#   - sglang_router --pd-disaggregation on 127.0.0.1:30080
+#     (prefill entry carries bootstrap port 9000; decode entry has none)
+# --disaggregation-transfer-backend nixl on both engines.
+#
+# Verbatim transcription of the verified `docker run` driver scripts
+# (launch_pd_prefill.sh + launch_pd_decode.sh + launch_pd_router.sh) from
+#   docs/run-summaries/b300-sglang-preview-dspark-tp8-vs-4p4d-20260914-summary.md
+# (image lmsysorg/sglang:v0.5.17-cu130, verified on i-0230a688056b553f5 2026-09-14,
+# stood up first try, full sweep with 0 failed requests).
+#
+# Key parameters (all from the summary, none invented):
+#   - image lmsysorg/sglang:v0.5.17-cu130, model deepseek-ai__DeepSeek-V4-Flash-DSpark
+#   - both engines --tp 4 --moe-runner-backend flashinfer_mxfp4 (NOT megamoe)
+#     --mem-fraction-static 0.90, --chunked-prefill-size 4096, --swa-full-tokens-ratio 0.1
+#   - decode adds --speculative-algorithm DSPARK (draft DeepseekV4ForCausalLMDSpark)
+#   - dp-attention left OFF (it causes AssertionError + GPU mem drop to 0)
+#   - env SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384,
+#     SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800, SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800
+#
+# Known caveats (see scripts/README-b300-launch-configs.md):
+#   - MUST pin physical cards with `--gpus '"device=..."'` (device_ids below);
+#     `--gpus all` collides (the prior vLLM PD run hit this).
+#   - benign router warning: conflicting load_balance_method prefill/decode (normal for PD).
+#   - DSpark acceptance is NOT surfaced through the PD router.
+#   - bench uses --random-range-ratio 1.0 (fixed 40k on v0.5.17; OPPOSITE of vLLM).
+#
+# Usage:
+#   docker compose -f docker-compose-sglang-pd-4p4d.yaml up -d
+#   # ~11-12 min cold start; then bench the router on http://127.0.0.1:30080
+
+volumes:
+  sgljit:
+
+x-common-env: &common-env
+  SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK: "16384"
+  SGLANG_DISAGGREGATION_WAITING_TIMEOUT: "1800"
+  SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT: "1800"
+
+x-common-service: &common-service
+  image: lmsysorg/sglang:v0.5.17-cu130
+  runtime: nvidia
+  network_mode: host
+  ipc: host
+  shm_size: 16g
+  volumes:
+    - /opt/dlami/nvme:/opt/dlami/nvme
+    - sgljit:/root/.cache
+  restart: "no"
+
+x-healthcheck: &healthcheck-base
+  interval: 60s
+  timeout: 10s
+  retries: 40
+  start_period: 1800s
+
+services:
+  prefill:
+    <<: *common-service
+    environment:
+      <<: *common-env
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0", "1", "2", "3"]
+              capabilities: ["gpu"]
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash-DSpark
+      --tp 4 --moe-runner-backend flashinfer_mxfp4 --mem-fraction-static 0.90
+      --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
+      --chunked-prefill-size 4096 --swa-full-tokens-ratio 0.1
+      --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
+      --disaggregation-transfer-backend nixl
+      --disaggregation-mode prefill --disaggregation-bootstrap-port 9000
+      --host 0.0.0.0 --port 30000
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30000/health"]
+
+  decode:
+    <<: *common-service
+    environment:
+      <<: *common-env
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["4", "5", "6", "7"]
+              capabilities: ["gpu"]
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash-DSpark
+      --tp 4 --moe-runner-backend flashinfer_mxfp4 --mem-fraction-static 0.90
+      --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics
+      --chunked-prefill-size 4096 --swa-full-tokens-ratio 0.1
+      --speculative-algorithm DSPARK
+      --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
+      --disaggregation-transfer-backend nixl
+      --disaggregation-mode decode --disaggregation-bootstrap-port 9300
+      --host 0.0.0.0 --port 30300
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30300/health"]
+
+  router:
+    <<: *common-service
+    shm_size: 2g
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+    depends_on:
+      prefill:
+        condition: service_healthy
+      decode:
+        condition: service_healthy
+    command: >
+      python3 -m sglang_router.launch_router
+      --pd-disaggregation
+      --prefill http://127.0.0.1:30000 9000
+      --decode http://127.0.0.1:30300
+      --host 0.0.0.0 --port 30080
+      --worker-startup-timeout-secs 60
+      --request-timeout-secs 3600
+    healthcheck:
+      <<: *healthcheck-base
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30080/health"]
+      start_period: 30s
+      retries: 5

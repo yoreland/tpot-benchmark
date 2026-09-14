@@ -1,0 +1,67 @@
+# docker-compose-sglang-tp8-preview-mxfp4.yaml
+# Round 3: SGLang preview whole-machine TP8, mxfp4 MoE + DSpark.
+# Target: B300 8-GPU (p6-b300.48xlarge), preview deepseek-ai/DeepSeek-V4-Flash-DSpark.
+# Serves directly on 127.0.0.1:30080.
+#
+# Verbatim transcription of the verified `docker run` (launch_tp8.sh) from
+#   docs/run-summaries/b300-sglang-preview-dspark-tp8-vs-4p4d-20260914-summary.md
+# (image lmsysorg/sglang:v0.5.17-cu130, verified on i-0230a688056b553f5 2026-09-14,
+# full sweep with 0 failed requests, DSpark accept length 5.47-5.76).
+#
+# Key parameters (all from the summary, none invented):
+#   - image lmsysorg/sglang:v0.5.17-cu130 (v0.5.12 has a flash-mla kernel crash >=16K)
+#   - model preview deepseek-ai__DeepSeek-V4-Flash-DSpark (fp8 / mxfp4)
+#   - --tp 8, --mem-fraction-static 0.90 (~252.5 GB/card, no OOM)
+#   - --moe-runner-backend flashinfer_mxfp4  (NOT megamoe: megamoe+EP8+DSPARK+
+#     cuda-graph crashes on B300; loads as Mxfp4FlashinferTrtllmMoEMethod)
+#   - --speculative-algorithm DSPARK (draft arch DeepseekV4ForCausalLMDSpark)
+#   - --chunked-prefill-size 4096, --swa-full-tokens-ratio 0.1
+#   - --cuda-graph-max-bs 64, --enable-metrics
+#   - --reasoning-parser deepseek-v4, --tool-call-parser deepseekv4
+#
+# Known caveat (see scripts/README-b300-launch-configs.md): the SGLang bench uses
+# --random-range-ratio 1.0 to get a FIXED 40k input (range_ratio is the MIN
+# fraction here). This is the OPPOSITE of the vLLM rounds, which need 0.0.
+#
+# Usage:
+#   docker compose -f docker-compose-sglang-tp8-preview-mxfp4.yaml up -d
+#   # ~13 min cold start; then bench http://127.0.0.1:30080
+
+volumes:
+  sgljit:
+
+services:
+  sglang-tp8:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    runtime: nvidia
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - sgljit:/root/.cache
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+    restart: "no"
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash-DSpark
+      --tp 8
+      --moe-runner-backend flashinfer_mxfp4
+      --mem-fraction-static 0.90
+      --trust-remote-code
+      --cuda-graph-max-bs 64
+      --enable-metrics
+      --chunked-prefill-size 4096
+      --swa-full-tokens-ratio 0.1
+      --speculative-algorithm DSPARK
+      --reasoning-parser deepseek-v4
+      --tool-call-parser deepseekv4
+      --host 0.0.0.0
+      --port 30080
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s
