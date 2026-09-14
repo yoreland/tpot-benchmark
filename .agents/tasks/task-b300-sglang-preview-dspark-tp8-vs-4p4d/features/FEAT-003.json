@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Hand-build the 4P4D PD-disaggregated topology (4-GPU prefill + 4-GPU decode) with SGLang native PD serving the SAME preview DSpark weights, then run the identical bench sweep for a like-for-like comparison. Depends on FEAT-002 completing its bench (both topologies share the one weight copy). Prefer SGLang native PD (--disaggregation-mode prefill|decode + nixl transfer backend + router) to keep the same weights/stack as TP8 for comparability; vLLM PD needs the different NVFP4 repo and is NOT the first choice. First tear down sglang-tp8 (docker rm -f) and confirm all 8 GPUs return to 0 MiB before launching PD.",
+  "status": "pending",
+  "steps": [
+    "Tear down TP8: `docker rm -f sglang-tp8`; confirm `nvidia-smi` shows all 8 cards at 0 MiB before proceeding (avoid GPU collision).",
+    "Adapt the proven SGLang PD reference scripts/docker-compose-pd-v4flash-b300.yaml for a 4P4D layout on preview DSpark: prefill engine on GPUs 0-3 (TP4) and decode engine on GPUs 4-7 (TP4) -- i.e. ONE prefill + ONE decode engine (4P4D = 4-card prefill + 4-card decode), not the reference's 3x(tp2)+1x(tp2). Pin physical cards explicitly with docker `--gpus '\"device=0,1,2,3\"'` (prefill) / `'\"device=4,5,6,7\"'` (decode) -- do NOT use --gpus all (it overrides NVIDIA_VISIBLE_DEVICES and collided engines in the prior vLLM run).",
+    "Carry over proven PD settings from the reference: --disaggregation-transfer-backend nixl (mooncake does NOT work for same-node PD); --disaggregation-mode prefill/decode with distinct --disaggregation-bootstrap-port per engine; keep dp-attention OFF (it caused AssertionError + GPU mem drop to 0); set env SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK=16384, SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1800, SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1800. Replace stable-weight+megamoe+EAGLE with preview weights + --moe-runner-backend flashinfer_mxfp4; keep DSpark on the decode side (--speculative-algorithm DSPARK) or as SGLang PD requires. Use base64-encoded scripts/compose to avoid send-command quoting issues.",
+    "Launch a sglang_router (launch_router --pd-disaggregation --prefill <url> <bootstrap-port> --decode <url> --host 0.0.0.0 --port 30080) so the PD endpoint is on the SAME loopback 127.0.0.1:30080 as TP8, letting the identical bench command be reused.",
+    "Poll each engine's health and the router: `curl -sf` on the prefill port, decode port, and router :30080/health. Confirm via nvidia-smi that memory splits GPUs 0-3 (prefill) vs 4-7 (decode) with no collision. Cold start ~20-25 min. Smoke one /v1/chat/completions through the router to prove prefill -> KV transfer -> decode -> stream end to end.",
+    "If preview DSpark + PD does not work on this SGLang version (spec-decode+PD incompatibility, KV layout mismatch, missing/failing transfer backend), capture the full error, judge the root cause, and try reasonable fixes: switch transfer backend (nixl<->mooncake), disable DSpark on the decode side first to validate the base PD path then re-add it, adjust mem-fraction. Record every blocker and its resolution in findings.",
+    "Run the IDENTICAL bench sweep (same 口径 as FEAT-002: 40k in / 1.5k out, c=1/2/4/8/16, same NP map, same validated --random-range-ratio) against 127.0.0.1:30080, writing to /opt/dlami/nvme/bench-out-pd/. Background with nohup + poll. Capture the same metrics; note that DSpark accept stats may not be surfaced through the PD router (as observed in the prior vLLM PD run) -- if so, confirm DSpark active from engine startup logs and document the limitation."
+  ],
+  "acceptance_criteria": [
+    "Prefill engine healthy on GPUs 0-3 and decode engine healthy on GPUs 4-7 (nvidia-smi confirms the 0-3 vs 4-7 memory split, no collision).",
+    "Router `curl -sf http://127.0.0.1:30080/health` returns 200 and a smoke chat completion through the router returns a valid response (PD path proven end to end).",
+    "bench_serving completes all 5 levels (c=1,2,4,8,16) with 0 failed requests, producing /opt/dlami/nvme/bench-out-pd/c{1,2,4,8,16}.jsonl + .log.",
+    "The exact PD route used (native SGLang PD, transfer backend, whether DSpark stayed on decode) and any blockers + fixes are recorded in findings."
+  ],
+  "verification": [
+    "SSM send-command `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:30080/health` returns 200 while PD engines run.",
+    "SSM send-command `nvidia-smi --query-gpu=index,memory.used --format=csv,noheader` shows nonzero memory on all of 0-7 split as prefill(0-3)/decode(4-7).",
+    "SSM send-command `ls -la /opt/dlami/nvme/bench-out-pd/ && grep -h 'Successful requests\\|Mean TPOT' /opt/dlami/nvme/bench-out-pd/c*.log` shows all 5 files with completed requests."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

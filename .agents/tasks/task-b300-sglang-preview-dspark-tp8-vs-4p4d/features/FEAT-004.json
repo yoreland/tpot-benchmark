@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-004",
+  "type": "docs",
+  "description": "Collect both topologies' bench results off the instance via SSM, build the comparison tables, and write the run summary. Depends on FEAT-002 and FEAT-003. Produces (a) whole-machine TP8 preview results table, (b) 4P4D preview results table, (c) side-by-side comparison + conclusion on which topology gives better TPOT/ITL. Summary lands in docs/run-summaries/ parallel to the two prior 2026-09-13 summaries.",
+  "status": "pending",
+  "steps": [
+    "Retrieve the raw bench artifacts from the instance via SSM: for both /opt/dlami/nvme/bench-out/ (TP8) and /opt/dlami/nvme/bench-out-pd/ (4P4D), cat the c*.log summary sections (Successful requests, TTFT/TPOT/ITL median+p90+p99, output/total token throughput, Speculative Decoding accept rate + accept length). Pull the key numbers back through the send-command output.",
+    "Build table (a): TP8 preview per-level metrics; table (b): 4P4D preview per-level metrics; table (c): TP8 vs 4P4D side-by-side on out tok/s, TPOT median/p99, ITL median/p99, TTFT, with a verdict on which topology wins on TPOT/ITL. Bold the winning cells. Note the DSpark accept rate/length for each topology (and flag if PD does not surface it through the router).",
+    "Write the summary to /projects/sandbox/tpot-benchmark/docs/run-summaries/b300-sglang-preview-dspark-tp8-vs-4p4d-20260914-summary.md following the structure and honesty of the two prior 2026-09-13 summaries (Environment table, 'Did it come up?', Troubleshooting narrative with every blocker + fix, Results tables, Comparison + Verdict, and a 'Not done (by design)' note that the instance/booking were intentionally left running for the orchestrator).",
+    "In the summary, explicitly record: whether the preview weight download succeeded (and whether the historical exit1 reproduced); whether TP8 came up (/health, DSpark head attached, accept len); whether 4P4D was stood up (which PD route/transfer backend, blockers + fixes); and the exact instance paths of the result files (/opt/dlami/nvme/bench-out/ and /opt/dlami/nvme/bench-out-pd/)."
+  ],
+  "acceptance_criteria": [
+    "docs/run-summaries/b300-sglang-preview-dspark-tp8-vs-4p4d-20260914-summary.md exists and contains all three tables (a TP8, b 4P4D, c comparison) with a clear TPOT/ITL verdict.",
+    "The summary records the four reporting items: weight-download outcome, TP8 bring-up status (health + DSpark head + accept len), 4P4D stand-up status (route/backend + blockers/fixes), and the instance result-file paths.",
+    "Numbers in the tables are the actual bench_serving outputs retrieved via SSM, not placeholders; if any topology failed to bench, that is stated honestly rather than fabricated."
+  ],
+  "verification": [
+    "`ls -la /projects/sandbox/tpot-benchmark/docs/run-summaries/b300-sglang-preview-dspark-tp8-vs-4p4d-20260914-summary.md` confirms the file exists.",
+    "Reading the summary confirms tables (a)(b)(c) are populated with real retrieved numbers and the four reporting items are present."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

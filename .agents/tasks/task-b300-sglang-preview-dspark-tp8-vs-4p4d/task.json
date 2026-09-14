@@ -1,0 +1,7 @@
+{
+  "task_id": "task-b300-sglang-preview-dspark-tp8-vs-4p4d",
+  "task_description": "On a new B300 (8xB300, i-0230a688056b553f5, us-west-2), serve the preview DeepSeek-V4-Flash-DSpark weights (deepseek-ai/DeepSeek-V4-Flash-DSpark, SGLang fp8/mxfp4 preview, ~167GB) via SGLang v0.5.17-cu130 in two topologies -- whole-machine single-instance TP8, and 4P4D PD-disaggregation (4-card prefill + 4-card decode) -- and run the same bench 口径 (40k in / 1.5k out, c=1/2/4/8/16) on each, then compare TPOT/ITL. All access is via AWS SSM send-command over loopback 127.0.0.1:30080 (SG has no ingress). Do NOT delete booking / stop instance; that irreversible teardown is the orchestrator's call after results.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}

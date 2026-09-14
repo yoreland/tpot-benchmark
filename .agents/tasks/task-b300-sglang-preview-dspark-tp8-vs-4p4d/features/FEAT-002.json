@@ -1,0 +1,29 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Bring up the whole-machine single-instance TP8 topology with SGLang v0.5.17-cu130 serving the preview DSpark weights, confirm DSpark is active, then run the standard bench sweep. Depends on FEAT-001 (weights downloaded). Uses --moe-runner-backend flashinfer_mxfp4 (NOT megamoe) per repo+Runbook warning that megamoe+EP8+DSPARK+cuda-graph crashes on B300.",
+  "status": "pending",
+  "steps": [
+    "Launch SGLang TP8 with the exact flags from the user Runbook (option A), base64-encoding the launch as a script to avoid send-command quoting issues. Run detached: `docker run -d --name sglang-tp8 --runtime nvidia --network host --ipc host --shm-size 16g -v /opt/dlami/nvme:/opt/dlami/nvme -v sgljit:/root/.cache -e NVIDIA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 lmsysorg/sglang:v0.5.17-cu130 python3 -m sglang.launch_server --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash-DSpark --tp 8 --moe-runner-backend flashinfer_mxfp4 --mem-fraction-static 0.90 --trust-remote-code --cuda-graph-max-bs 64 --enable-metrics --chunked-prefill-size 4096 --swa-full-tokens-ratio 0.1 --speculative-algorithm DSPARK --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4 --host 0.0.0.0 --port 30080`.",
+    "Poll `docker logs sglang-tp8` (tail) every few minutes. Cold start can take 10-25 min (weight load + JIT/DeepGEMM compile + FlashInfer autotune + cuda-graph capture). Watch for the DSpark confirmation line 'Draft checkpoint bundles a DSpark head' and for 'Application startup complete' / server ready.",
+    "Confirm health: SSM send-command `curl -sf http://127.0.0.1:30080/health` returns 200. If startup errors (mxfp4 kernel issue, DSpark not attaching, OOM at mem-fraction 0.90), capture the full docker logs, diagnose, and apply a reasonable fix (e.g. drop mem-fraction-static to 0.85, adjust cuda-graph-max-bs). Record any deviation from the Runbook flags in findings.",
+    "Smoke one /v1/chat/completions request through 127.0.0.1:30080 to confirm end-to-end generation before the sweep.",
+    "Validate range-ratio semantics with c=1 BEFORE the full sweep: run one bench_serving at c=1 and confirm it takes a fixed 40k input (SGLang range-ratio semantics differ from vLLM's). If SGLang rejects --random-range-ratio 1.0, adjust to the value that yields fixed 40k for this SGLang version and record the change in findings.",
+    "Run the full sweep inside the container, writing to /opt/dlami/nvme/bench-out/: for C in 1 2 4 8 16 with NP map {1:8, 2:8, 4:12, 8:24, 16:48}, `python3 -m sglang.bench_serving --backend sglang-oai --host 127.0.0.1 --port 30080 --dataset-name random --random-input-len 40000 --random-output-len 1500 --random-range-ratio <validated> --max-concurrency $C --num-prompts $NP --flush-cache --output-file /opt/dlami/nvme/bench-out/c${C}.jsonl 2>&1 | tee /opt/dlami/nvme/bench-out/c${C}.log`. Background with nohup + poll since the full sweep is long.",
+    "For each level record from the bench output: TTFT median/p90/p99, TPOT median/p90/p99, ITL, output token throughput, and the Speculative Decoding section (DSpark accept rate + accept length). Confirm accept len > 1.0 (spec-decode accepting); if ~1.00, investigate whether DSpark was stripped."
+  ],
+  "acceptance_criteria": [
+    "`curl -sf http://127.0.0.1:30080/health` returns HTTP 200 with sglang-tp8 running on all 8 GPUs (nvidia-smi shows memory used across cards 0-7).",
+    "Startup log contains 'Draft checkpoint bundles a DSpark head' (DSpark head attached).",
+    "A smoke chat completion through 127.0.0.1:30080 returns a valid response.",
+    "bench_serving completes all 5 concurrency levels (c=1,2,4,8,16) with 0 failed requests and completed == num_prompts, producing /opt/dlami/nvme/bench-out/c{1,2,4,8,16}.jsonl + .log.",
+    "DSpark accept length is captured per level and is > 1.0 at least at low concurrency (or a documented investigation explains why not)."
+  ],
+  "verification": [
+    "SSM send-command `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:30080/health` returns 200.",
+    "SSM send-command `docker logs sglang-tp8 2>&1 | grep -i 'DSpark head'` returns the confirmation line.",
+    "SSM send-command `ls -la /opt/dlami/nvme/bench-out/ && grep -h 'Successful requests\\|Mean TPOT\\|accept' /opt/dlami/nvme/bench-out/c*.log` shows all 5 files with completed requests and TPOT/accept stats."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
