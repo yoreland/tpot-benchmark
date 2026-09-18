@@ -1,0 +1,14 @@
+{
+  "task_id": "task-booking-platform",
+  "task_description": "Build a one-click GPU instance booking platform with UI. Customers can request H200/B300/B200 spot instances with specific deployment plans (docker-compose topologies). The platform scans for global capacity, auto-deploys on success, provides an OpenAI-compatible endpoint with IP whitelist, sends notifications via Feishu webhook, handles same-type instance conflicts with user confirmation, and shows monitoring/history. Deployed via CDK with basic auth.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "CDK TypeScript build passes, cdk synth produces valid CloudFormation, all 15 tests pass (including 3 new tests for EventBridge rules and instance profile), frontend builds successfully, all Python Lambda handlers pass AST validation. All 10 review issues addressed."
+  }
+}

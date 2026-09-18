@@ -1,0 +1,37 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "React SPA frontend with booking form, real-time status monitoring, endpoint display, IP whitelist management, notification configuration, and booking history. Simple functional UI with basic auth login.",
+  "status": "completed",
+  "steps": [
+    "Create platform/frontend/ with package.json for React 18 + TypeScript + Vite build tool. Dependencies: react, react-dom, @types/react, @types/react-dom, typescript, vite, @vitejs/plugin-react, antd (for UI components).",
+    "Create platform/frontend/src/main.tsx: React app entry point with BrowserRouter",
+    "Create platform/frontend/src/App.tsx: Main app layout with sidebar navigation (Bookings, Monitoring, History, Settings) and basic auth login modal on first load. Store credentials in sessionStorage for API calls.",
+    "Create platform/frontend/src/api/client.ts: API client that makes fetch calls to the API Gateway URL with Basic Auth header. Configure base URL from environment variable VITE_API_URL. Methods: createBooking, listBookings, getBooking, cancelBooking, updateWhitelist, getDeploymentPlans, getInstances, updateNotificationConfig.",
+    "Create platform/frontend/src/pages/BookingPage.tsx: (a) Dropdown to select deployment plan (fetched from GET /deployments, showing instance type + topology description), (b) Submit button that calls POST /bookings, (c) Conflict dialog: when API returns 409, show modal with 'An instance of this type is already running with plan X. Override and redeploy?' with Confirm/Cancel buttons. Confirm sends POST with confirmOverride=true.",
+    "Create platform/frontend/src/pages/MonitoringPage.tsx: (a) List of active bookings with status badges (polling=yellow spinning, launching=blue, deploying=orange, ready=green, failed=red), (b) For 'ready' bookings: show OpenAI-compatible endpoint URL (http://<ip>:30080/v1), copy button, (c) IP whitelist editor: text area for IPs (one per line) with Save button calling PUT /bookings/{id}/whitelist, (d) Auto-refresh every 10 seconds.",
+    "Create platform/frontend/src/pages/HistoryPage.tsx: Table of all bookings (current + past) with columns: ID, Instance Type, Plan, Status, Created, Duration, Region. Sort by created desc. Status filter dropdown.",
+    "Create platform/frontend/src/pages/SettingsPage.tsx: (a) Email notification: input for email address, (b) Feishu webhook: input for webhook URL with test button, (c) Save button calling PUT /notifications.",
+    "Create platform/frontend/vite.config.ts with React plugin and proxy config for local dev",
+    "Create platform/frontend/index.html as Vite entry point",
+    "Add build script in platform/frontend/package.json: 'build' outputs to dist/ which CDK deploys to S3",
+    "Update CDK stack to include BucketDeployment that deploys frontend/dist/ to the S3 bucket after build"
+  ],
+  "acceptance_criteria": [
+    "Running 'cd platform/frontend && npm install && npm run build' produces dist/ with index.html",
+    "All TypeScript files compile without errors",
+    "The booking form shows available deployment plans with instance type descriptions",
+    "Conflict detection dialog appears on 409 response",
+    "Monitoring page shows endpoint URL for ready bookings",
+    "IP whitelist editor allows managing allowed IPs",
+    "Settings page allows configuring email and Feishu webhook",
+    "CDK synth still succeeds with the frontend deployment added"
+  ],
+  "verification": [
+    "cd platform/frontend && npm install && npm run build",
+    "cd platform && npm run build && npx cdk synth --quiet",
+    "cd platform && npm test"
+  ],
+  "blocked_reason": null,
+  "findings": "Frontend builds successfully with React 18.3 + Vite 6.4 + Ant Design 5.x. Required vite-env.d.ts for import.meta.env typing. Added platform/.gitignore to exclude node_modules, dist, and cdk.out. CDK BucketDeployment uses path.join(__dirname, '../frontend/dist') to reference the built frontend. All 12 CDK tests pass. Frontend bundle is ~1MB (antd is large but acceptable for internal tool). package-lock.json checked in for reproducible builds."
+}

@@ -1,0 +1,53 @@
+# docker-compose-tp8-h200.yaml
+# H200 整机部署（unified，非 PD 分离）+ EAGLE
+# Target: p5en.48xlarge (8x H200 141GB), DeepSeek-V4-Flash
+# Purpose: 与 B300 在同一客户口径（40K in / 1.5K out, range_ratio=1.0）下横向对比
+#
+# 与 B300 版本的关键差异（Hopper vs Blackwell，不能照抄）：
+#   - MoE runner: --moe-runner-backend marlin （W4A16 Marlin）
+#     Hopper 走原始 FP4 checkpoint 必须用 Marlin；B300 用的 megamoe(DeepGEMM)
+#     是 Blackwell 路径，在 Hopper 上不适用。
+#   - 不设 SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK
+#     （那是 megamoe/DeepGEMM 专有的 token 预算校验，Marlin 路径不需要）
+#   - 不开 dp-attention：cookbook 明确 Hopper FP4/Marlin 路径 "It is TP-only"
+#
+# 关于 tp：SGLang cookbook 给 H200 的处方是 TP=4。这里按「整机部署」用 tp=8，
+# 若 tp=8 起不来则回退 docker-compose-tp4-h200.yaml（cookbook 处方值）。
+#
+# 对外端口统一 30080，与 B300 三份 compose 一致，bench 命令不用改。
+
+volumes:
+  jitcache:
+
+services:
+  sglang-h200:
+    image: lmsysorg/sglang:v0.5.17-cu130
+    runtime: nvidia
+    network_mode: host
+    ipc: host
+    shm_size: 16g
+    volumes:
+      - /opt/dlami/nvme:/opt/dlami/nvme
+      - jitcache:/root/.cache
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+    restart: "no"
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /opt/dlami/nvme/models/deepseek-ai__DeepSeek-V4-Flash
+      --tp 8
+      --moe-runner-backend marlin
+      --mem-fraction-static 0.85
+      --trust-remote-code
+      --cuda-graph-max-bs 64
+      --enable-metrics
+      --speculative-algorithm EAGLE --speculative-num-steps 3
+      --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
+      --reasoning-parser deepseek-v4 --tool-call-parser deepseekv4
+      --host 0.0.0.0 --port 30080
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:30080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 40
+      start_period: 1800s
