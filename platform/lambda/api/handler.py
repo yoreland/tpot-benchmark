@@ -522,6 +522,65 @@ def _slugify_plan_id(name: str) -> str:
     return slug
 
 
+def extract_model_from_compose(compose_content: str):
+    """Derive the HuggingFace model repo id referenced by a compose file.
+
+    The compose YAML pins the model weights to an absolute path of the form
+    ``/opt/dlami/nvme/models/<slug>`` where ``<slug>`` is the HF repo id with
+    ``/`` replaced by ``__``. This path appears in several writings across the
+    real compose files:
+
+      * SGLang: ``--model-path /opt/dlami/nvme/models/<slug>``
+      * vLLM:   ``--model /opt/dlami/nvme/models/<slug>``
+      * shell:  ``MODEL=/opt/dlami/nvme/models/<slug>``
+
+    This helper is a pure text/regex scan (no PyYAML, no boto3) so it works on
+    the plain-asset Lambda runtime and is trivially unit testable. It mirrors
+    the no-PyYAML approach used by ``_fallback_has_services_mapping``.
+
+    Conflict/consistency policy:
+      * zero paths found            -> return ``None`` (callers fall back)
+      * exactly one distinct slug   -> return its repo id
+      * the SAME slug repeated N x  -> normal case, resolve to one repo id
+      * multiple DIFFERENT slugs    -> return the FIRST one encountered and log
+                                       a warning listing the ignored slugs; do
+                                       not raise
+
+    Slug -> repo id conversion replaces ONLY the FIRST ``__`` with ``/`` (the
+    org/name separator); the name part may itself contain ``__`` and is left
+    intact.
+    """
+    if not compose_content:
+        return None
+
+    # Capture the first path component after ``models/`` and stop at any
+    # whitespace, quote or backslash so trailing path segments / flags are
+    # excluded.
+    matches = re.findall(
+        r"/opt/dlami/nvme/models/([^\s'\"\\/]+)", compose_content
+    )
+    if not matches:
+        return None
+
+    # Preserve first-seen order while collecting distinct slugs.
+    distinct = []
+    for slug in matches:
+        if slug not in distinct:
+            distinct.append(slug)
+
+    first_slug = distinct[0]
+    if len(distinct) > 1:
+        logger.warning(
+            "compose references multiple model paths %s; using the first (%s) "
+            "and ignoring the rest",
+            distinct,
+            first_slug,
+        )
+
+    # Replace only the FIRST '__' with '/' to recover the org/name repo id.
+    return first_slug.replace("__", "/", 1)
+
+
 def _fallback_has_services_mapping(content: str) -> bool:
     """Structural check for a top-level `services:` mapping without PyYAML.
 
@@ -672,7 +731,16 @@ def create_deployment_plan(body: dict) -> dict:
     # data migration.
     recipe = (body.get("recipe") or DEFAULT_PLAN_RECIPE).strip() or DEFAULT_PLAN_RECIPE
     description = (body.get("description") or "").strip()
-    model_name = (body.get("modelName") or DEFAULT_PLAN_MODEL).strip() or DEFAULT_PLAN_MODEL
+    # Prefer the model pinned in the compose content itself: the deployer
+    # downloads weights to the exact path the compose file references, so the
+    # stored modelName must match it for the UI to reflect what is deployed.
+    # Fall back to the request modelName (optional) / default only when the
+    # compose file does not pin a model path.
+    derived_model = extract_model_from_compose(compose_content)
+    if derived_model:
+        model_name = derived_model
+    else:
+        model_name = (body.get("modelName") or DEFAULT_PLAN_MODEL).strip() or DEFAULT_PLAN_MODEL
 
     # Write compose content to S3
     if not COMPOSE_BUCKET:

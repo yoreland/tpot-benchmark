@@ -1,0 +1,14 @@
+{
+  "task_id": "task-compose-modelname-autodetect",
+  "task_description": "Fix the custom docker-compose upload bug: when a compose template references a model the deployer has never seen and the user leaves modelName empty/wrong, weights download to a directory the container never reads and the deployment fails. Auto-derive modelName from the compose YAML (PyYAML-free text scan of the /opt/dlami/nvme/models/<slug> path, slug->repo id by replacing the first '__' with '/'). Wire it into the deployer (primary fix: model download path) with priority compose > plan record modelName > DEFAULT_MODEL_NAME, and into the api upload path (persist derived modelName for UI consistency). Add pytest unit tests. Preserve backward compatibility for the 7 built-in plans and existing user plan records.",
+  "status": "completed",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "py_compile of both handlers exits 0. python3.12 -m pytest platform/lambda/tests/ -> 43 passed. Test quality: extract_model_from_compose tests call the real helper in both packages and assert parity; deployer priority tests exercise the real _get_compose_commands (monkeypatching only the S3 loader) and assert on the generated snapshot_download model id + local_dir, so they would fail if the compose-precedence wiring were reverted. Built-in compose files provably parse back to the existing PLAN_MODEL_MAP values. No Dockerfile for these Python Lambdas, so docker_build not applicable."
+  }
+}

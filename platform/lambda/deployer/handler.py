@@ -20,6 +20,7 @@ Phase 2 (check_progress): Invoked every 2 minutes by EventBridge schedule.
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -317,6 +318,65 @@ def _load_compose_content(compose_file: str) -> str:
     return ""
 
 
+def extract_model_from_compose(compose_content: str):
+    """Derive the HuggingFace model repo id referenced by a compose file.
+
+    The compose YAML pins the model weights to an absolute path of the form
+    ``/opt/dlami/nvme/models/<slug>`` where ``<slug>`` is the HF repo id with
+    ``/`` replaced by ``__``. This path appears in several writings across the
+    real compose files:
+
+      * SGLang: ``--model-path /opt/dlami/nvme/models/<slug>``
+      * vLLM:   ``--model /opt/dlami/nvme/models/<slug>``
+      * shell:  ``MODEL=/opt/dlami/nvme/models/<slug>``
+
+    This helper is a pure text/regex scan (no PyYAML, no boto3) so it works on
+    the plain-asset Lambda runtime and is trivially unit testable. It mirrors
+    the no-PyYAML approach used by the api Lambda's compose validation.
+
+    Conflict/consistency policy:
+      * zero paths found            -> return ``None`` (callers fall back)
+      * exactly one distinct slug   -> return its repo id
+      * the SAME slug repeated N x  -> normal case, resolve to one repo id
+      * multiple DIFFERENT slugs    -> return the FIRST one encountered and log
+                                       a warning listing the ignored slugs; do
+                                       not raise
+
+    Slug -> repo id conversion replaces ONLY the FIRST ``__`` with ``/`` (the
+    org/name separator); the name part may itself contain ``__`` and is left
+    intact.
+    """
+    if not compose_content:
+        return None
+
+    # Capture the first path component after ``models/`` and stop at any
+    # whitespace, quote or backslash so trailing path segments / flags are
+    # excluded.
+    matches = re.findall(
+        r"/opt/dlami/nvme/models/([^\s'\"\\/]+)", compose_content
+    )
+    if not matches:
+        return None
+
+    # Preserve first-seen order while collecting distinct slugs.
+    distinct = []
+    for slug in matches:
+        if slug not in distinct:
+            distinct.append(slug)
+
+    first_slug = distinct[0]
+    if len(distinct) > 1:
+        logger.warning(
+            "compose references multiple model paths %s; using the first (%s) "
+            "and ignoring the rest",
+            distinct,
+            first_slug,
+        )
+
+    # Replace only the FIRST '__' with '/' to recover the org/name repo id.
+    return first_slug.replace("__", "/", 1)
+
+
 def _get_compose_commands(deployment_plan: str, compose_file: str, model_name: str = "") -> list:
     """Generate the full deployment commands including model download.
 
@@ -330,10 +390,8 @@ def _get_compose_commands(deployment_plan: str, compose_file: str, model_name: s
     The compose file content is inlined via heredoc so no external S3 bucket
     is required.
     """
-    if not model_name:
-        model_name = DEFAULT_MODEL_NAME
-    model_local_path = f"/opt/dlami/nvme/models/{model_name.replace('/', '__')}"
-
+    # Load the compose content once and reuse it for both model extraction and
+    # the heredoc below (avoid a second S3 fetch).
     compose_content = _load_compose_content(compose_file)
     if not compose_content:
         return [
@@ -341,6 +399,28 @@ def _get_compose_commands(deployment_plan: str, compose_file: str, model_name: s
             f"echo 'ERROR: compose file {compose_file} not found in Lambda bundle' >&2",
             "exit 1",
         ]
+
+    # Model-name resolution priority:
+    #   (1) the model pinned in the actual compose content (source of truth for
+    #       the download path the container will read),
+    #   (2) the passed model_name (plan record modelName),
+    #   (3) DEFAULT_MODEL_NAME.
+    # When the compose-derived model disagrees with a non-empty passed value,
+    # the compose file wins because it dictates the directory the container
+    # actually reads; log a warning so the mismatch is visible.
+    derived_model = extract_model_from_compose(compose_content)
+    if derived_model:
+        if model_name and model_name != derived_model:
+            logger.warning(
+                "compose file %s pins model %s which overrides plan modelName %s",
+                compose_file,
+                derived_model,
+                model_name,
+            )
+        model_name = derived_model
+    elif not model_name:
+        model_name = DEFAULT_MODEL_NAME
+    model_local_path = f"/opt/dlami/nvme/models/{model_name.replace('/', '__')}"
 
     commands = [
         "#!/bin/bash",
