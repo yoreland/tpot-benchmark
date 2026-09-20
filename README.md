@@ -96,6 +96,24 @@ P5 / P6 这类 GPU 实例很烧钱，**一台每小时数十美元**（B300 约 
 
 ---
 
+## 部署排障 Skill
+
+配套一个**只读**诊断工作流，用于排查本平台上 booking 卡住 / 部署失败：查 booking 状态、SSM 实时与历史日志、`tpot-booking-deployer` Lambda 日志，以及 `plan.modelName` 与 compose `--model-path` 的错配。
+
+> **READ-ONLY（只诊断、不改动）**：全程只做只读查询，不修改 DynamoDB、不改 Lambda、不动 booking，SSM 上也只跑 `tail / docker ps / docker logs / ls / df -h / cat / nvidia-smi` 之类的只读命令。任何修复都交给人工在结论之外手动完成。
+
+它能识别的失败模式：
+
+- **模型错配** —— `plan.modelName` 与 compose `--model-path` 指向的目录对不上，SGLang 找不到模型目录、容器 `Exited(1)`。
+- **NVMe RAID 假成功导致满盘** —— `mdadm --create` 在盘已挂载时报 `Device or resource busy` 却被 `|| true` 吞掉并打印假的 `mounted`，模型落到根盘把磁盘写满。
+- **无容量** —— booking 长时间卡在 `polling`（或 `failed`）且没有 `instanceId`。
+- **镜像或权重下载失败** —— `docker pull` 或 `snapshot_download` 报错。
+- **DSpark 草稿头权重** —— DSpark 预览版需要带 draft head 的权重，稳定版没有，最终表现为模型目录错配。
+
+使用见 [deployment-troubleshooter/SKILL.md](./deployment-troubleshooter/SKILL.md)。
+
+---
+
 ## 仓库结构导航
 
 | 目录 | 内容 |
@@ -104,6 +122,7 @@ P5 / P6 这类 GPU 实例很烧钱，**一台每小时数十美元**（B300 约 
 | [`reports/`](./reports/) | **真实实测数据**：四份 benchmark 报告，每份含自己的 README |
 | `scripts/` + `infra/` | 更早的**裸 EC2 / EKS** benchmark 路线（分级台阶脚本、recipes、EKS/HyperPod 部署） |
 | [`docs/`](./docs/) | 运维与复盘：[RUNBOOK.md](./docs/RUNBOOK.md)、[postmortem-2026-08-07-p5en-run.md](./docs/postmortem-2026-08-07-p5en-run.md)、b300-live-instance.md、run-summaries/，以及迁移来的[选型方法论深度文档](./docs/benchmark-methodology.md) |
+| [`deployment-troubleshooter/`](./deployment-troubleshooter/) | 只读部署排障 skill（诊断 booking/部署失败） |
 
 ---
 
