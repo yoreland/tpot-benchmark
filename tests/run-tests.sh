@@ -1265,6 +1265,22 @@ fi
 end_case
 
 # =============================================================================
+# --version / -V 测试（issue #11）—— 独立子套件，结果并入总判定
+# =============================================================================
+begin_case 32 "--version / -V：退出码 0、格式、-V 一致、usage 文档化"
+VERSION_SUITE="$REPO_ROOT/tests/test_version.sh"
+if [[ -f "$VERSION_SUITE" ]]; then
+    if bash "$VERSION_SUITE"; then
+        assert_exit 0 0 "version 子套件全部通过"
+    else
+        assert_exit 0 1 "version 子套件存在失败"
+    fi
+else
+    assert_exit 0 1 "找不到 tests/test_version.sh"
+fi
+end_case
+
+# =============================================================================
 # 汇总
 # =============================================================================
 echo ""

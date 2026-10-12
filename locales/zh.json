@@ -18,6 +18,7 @@
   "usage.opt.num_prompts": "请求数量 (默认: %s)",
   "usage.opt.max_concurrency": "最大并发数 (默认: %s)",
   "usage.opt.lang": "输出语言: en 或 zh (默认: 自动探测，缺失回退到 en)",
+  "usage.opt.version": "打印版本并退出",
   "usage.opt.help": "显示帮助信息",
   "usage.examples_header": "示例:",
   "usage.example.b300": "# 在 B300 上运行",
