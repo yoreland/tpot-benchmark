@@ -18,6 +18,7 @@
   "usage.opt.num_prompts": "Number of requests (default: %s)",
   "usage.opt.max_concurrency": "Maximum concurrency (default: %s)",
   "usage.opt.lang": "Output language: en or zh (default: auto-detect, falls back to en)",
+  "usage.opt.version": "Print version and exit",
   "usage.opt.help": "Show this help message",
   "usage.examples_header": "Examples:",
   "usage.example.b300": "# Run on B300",

@@ -76,6 +76,22 @@ i18n_init "$LANG_FLAG"
 unset _args _i
 
 # =============================================================================
+# 版本信息 — issue #11
+# --version / -V 打印 `run-benchmark.sh X.Y.Z` 并退出 0，先于其余参数解析处理，
+# 任何位置、任何其它参数在场都生效。
+# =============================================================================
+VERSION="1.0.0"
+for _arg in "$@"; do
+    case "$_arg" in
+        --version|-V)
+            printf '%s %s\n' "$(basename "${BASH_SOURCE[0]}")" "$VERSION"
+            exit 0
+            ;;
+    esac
+done
+unset _arg
+
+# =============================================================================
 # 命令行参数解析
 # =============================================================================
 usage() {
@@ -95,6 +111,7 @@ $(t usage.options_header)
   --num-prompts N           $(t usage.opt.num_prompts "$NUM_PROMPTS")
   --max-concurrency N       $(t usage.opt.max_concurrency "$MAX_CONCURRENCY")
   --lang LANG               $(t usage.opt.lang)
+  --version, -V             $(t usage.opt.version)
   --help                    $(t usage.opt.help)
 
 $(t usage.examples_header)
@@ -124,6 +141,7 @@ while [[ $# -gt 0 ]]; do
         --max-concurrency) MAX_CONCURRENCY="$2"; shift 2 ;;
         --num-prompts) NUM_PROMPTS="$2"; shift 2 ;;
         --lang) shift 2 ;;  # 已在上面预扫描处理
+        --version|-V) shift ;;  # 已在上面预扫描处理并退出；此分支仅防御
         --help) usage ;;
         *) echo "$(t error.unknown_arg "$1")"; usage ;;
     esac
