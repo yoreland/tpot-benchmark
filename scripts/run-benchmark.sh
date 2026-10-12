@@ -57,35 +57,54 @@ TPOT_THRESHOLD_MS=4.5
 TTFT_THRESHOLD_MS=1700
 
 # =============================================================================
+# 国际化 (i18n) — issue #9
+# 先扫一遍 --lang，确保 usage() / 报错在正确的语言下输出。
+# 语言解析顺序：--lang > $TPOT_LANG > $LANG/$LC_ALL > en（回退）。
+# =============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/i18n.sh
+source "$SCRIPT_DIR/lib/i18n.sh"
+
+LANG_FLAG=""
+_args=("$@")
+for ((_i = 0; _i < ${#_args[@]}; _i++)); do
+    if [[ "${_args[$_i]}" == "--lang" ]]; then
+        LANG_FLAG="${_args[$((_i + 1))]:-}"
+    fi
+done
+i18n_init "$LANG_FLAG"
+unset _args _i
+
+# =============================================================================
 # 命令行参数解析
 # =============================================================================
 usage() {
     cat <<EOF
-用法: $0 [选项]
+$(t usage.title "$0")
 
-选项:
-  --cluster-name NAME       EKS 集群名称 (默认: $CLUSTER_NAME)
-  --region REGION           AWS Region (默认: $REGION)
-  --instance-type TYPE      实例类型 (默认: $INSTANCE_TYPE)
-  --model MODEL             模型名称 (默认: $MODEL_NAME)
-  --tp SIZE                 张量并行度 (默认: $TP_SIZE)
-  --dp SIZE                 数据并行度 (默认: 不启用；只有重打包 FP8 权重才该开)
-  --nvme-host-path PATH     宿主机本地 NVMe 路径 (默认: $NVME_HOST_PATH,
-                            HyperPod 用 /opt/dlami/nvme)
-  --input-tokens N          输入 token 数 (默认: $INPUT_TOKENS)
-  --output-tokens N         输出 token 数 (默认: $OUTPUT_TOKENS)
-  --num-prompts N           请求数量 (默认: $NUM_PROMPTS)
-  --max-concurrency N       最大并发数 (默认: $MAX_CONCURRENCY)
-  --help                    显示帮助信息
+$(t usage.options_header)
+  --cluster-name NAME       $(t usage.opt.cluster_name "$CLUSTER_NAME")
+  --region REGION           $(t usage.opt.region "$REGION")
+  --instance-type TYPE      $(t usage.opt.instance_type "$INSTANCE_TYPE")
+  --model MODEL             $(t usage.opt.model "$MODEL_NAME")
+  --tp SIZE                 $(t usage.opt.tp "$TP_SIZE")
+  --dp SIZE                 $(t usage.opt.dp)
+  --nvme-host-path PATH     $(t usage.opt.nvme_host_path "$NVME_HOST_PATH")
+  --input-tokens N          $(t usage.opt.input_tokens "$INPUT_TOKENS")
+  --output-tokens N         $(t usage.opt.output_tokens "$OUTPUT_TOKENS")
+  --num-prompts N           $(t usage.opt.num_prompts "$NUM_PROMPTS")
+  --max-concurrency N       $(t usage.opt.max_concurrency "$MAX_CONCURRENCY")
+  --lang LANG               $(t usage.opt.lang)
+  --help                    $(t usage.opt.help)
 
-示例:
-  # 在 B300 上运行
+$(t usage.examples_header)
+  $(t usage.example.b300)
   ./scripts/run-benchmark.sh --instance-type p6-b300.48xlarge --tp 8 --region us-east-1
 
-  # 在 H200 上运行
+  $(t usage.example.h200)
   ./scripts/run-benchmark.sh --instance-type p5en.48xlarge --tp 4 --region us-west-2
 
-  # 在 B200 上运行
+  $(t usage.example.b200)
   ./scripts/run-benchmark.sh --instance-type p6-b200.48xlarge --tp 8 --region us-east-2
 EOF
     exit 0
@@ -102,10 +121,11 @@ while [[ $# -gt 0 ]]; do
         --nvme-host-path) NVME_HOST_PATH="$2"; shift 2 ;;
         --input-tokens) INPUT_TOKENS="$2"; shift 2 ;;
         --output-tokens) OUTPUT_TOKENS="$2"; shift 2 ;;
-        --num-prompts) NUM_PROMPTS="$2"; shift 2 ;;
         --max-concurrency) MAX_CONCURRENCY="$2"; shift 2 ;;
+        --num-prompts) NUM_PROMPTS="$2"; shift 2 ;;
+        --lang) shift 2 ;;  # 已在上面预扫描处理
         --help) usage ;;
-        *) echo "未知参数: $1"; usage ;;
+        *) echo "$(t error.unknown_arg "$1")"; usage ;;
     esac
 done
 
@@ -138,7 +158,7 @@ trap cleanup EXIT
 log "检查工具依赖..."
 for cmd in kubectl aws python3; do
     if ! command -v "$cmd" &>/dev/null; then
-        echo "错误: 未找到命令 '$cmd'，请先安装" >&2
+        echo "$(t error.command_not_found "$cmd")" >&2
         exit 1
     fi
 done
@@ -152,7 +172,7 @@ aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$REGION"
 log "已更新 kubeconfig"
 
 # 验证集群连接
-kubectl cluster-info || { echo "错误: 无法连接到集群" >&2; exit 1; }
+kubectl cluster-info || { echo "$(t error.cluster_unreachable)" >&2; exit 1; }
 
 # =============================================================================
 # Step c) 等待 GPU 节点 Ready
@@ -173,7 +193,7 @@ for i in $(seq 1 60); do
 done
 
 if [[ "$NODE_READY" != "true" ]]; then
-    echo "错误: 等待 GPU 节点超时 (30 分钟)" >&2
+    echo "$(t error.gpu_node_timeout)" >&2
     exit 1
 fi
 
@@ -314,7 +334,7 @@ for i in $(seq 1 120); do
         break
     fi
     if [[ $i -eq 120 ]]; then
-        echo "错误: 模型加载超时" >&2
+        echo "$(t error.model_load_timeout)" >&2
         exit 1
     fi
     sleep 15
@@ -330,7 +350,7 @@ sleep 5
 
 # 验证 port-forward 可用
 if ! curl -s "http://localhost:$LOCAL_PORT/health" | grep -q "ok"; then
-    echo "错误: port-forward 不可用" >&2
+    echo "$(t error.port_forward_unavailable)" >&2
     exit 1
 fi
 log "Port-forward 建立成功"
